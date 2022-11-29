@@ -3,10 +3,30 @@ import sys
 import logging
 import argparse
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget
+from PyQt6.QtGui import QDragEnterEvent, QDropEvent
+from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton
 
 
 logger = logging.getLogger(__name__)
+
+
+class DropTargetButton(QPushButton):
+    def __init__(self, title, parent):
+        super().__init__(title, parent)
+        self.setAcceptDrops(True)
+        self.drop_url = None
+
+    def dragEnterEvent(self, a0: QDragEnterEvent) -> None:
+        has_urls = a0.mimeData().hasUrls()
+        logger.debug(f'dragEnterEvent: hasUrls: {has_urls}')
+        if has_urls:
+            a0.accept()
+        else:
+            a0.ignore()
+
+    def dropEvent(self, a0: QDropEvent) -> None:
+        self.drop_url = a0.mimeData().urls()
+        logger.debug(f'dropEvent: {self.drop_url}')
 
 
 class ProtoframeWindow(QMainWindow):
@@ -15,13 +35,25 @@ class ProtoframeWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.init_ui()
+        self.initUI()
 
-    def init_ui(self):
+        self.drop_target_1 = None
+
+    def initUI(self):
         logger.debug('Initializing UI')
 
         self.setWindowTitle('Protoframe')
+        self.setGeometry(200, 200, 400, 300)
+        self.setStyleSheet(
+            f'background-color: #222222;'
+        )
+
+        logger.debug('Initializing drop_target_1')
+        self.drop_target_1 = DropTargetButton("Drop Target 1", self)
+        self.drop_target_1.setGeometry(20, 20, 100, 100)
+        self.drop_target_1.setStyleSheet(
+            f'background-color: #dddddd;'
+        )
 
         logger.debug('Showing ProtoframeWindow')
         self.show()
@@ -65,8 +97,8 @@ def main() -> None:
         logger.debug(f'Initializing QApplication')
         app = QApplication(sys.argv)
 
-        logger.debug(f'Initializing ProtocommWindow')
-        pcw = ProtoframeWindow()
+        logger.debug(f'Initializing ProtoframeWindow')
+        pfw = ProtoframeWindow()
 
         # Enter main GUI update loop
         logger.info(f'Entering GUI update loop')
