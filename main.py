@@ -2,6 +2,7 @@ import os
 import sys
 import logging
 import argparse
+from typing import List
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton
@@ -14,7 +15,7 @@ class DropTargetButton(QPushButton):
     def __init__(self, title, parent):
         super().__init__(title, parent)
         self.setAcceptDrops(True)
-        self.drop_url = None
+        self.dropped_urls = List
 
     def dragEnterEvent(self, a0: QDragEnterEvent) -> None:
         has_urls = a0.mimeData().hasUrls()
@@ -25,8 +26,9 @@ class DropTargetButton(QPushButton):
             a0.ignore()
 
     def dropEvent(self, a0: QDropEvent) -> None:
-        self.drop_url = a0.mimeData().urls()
-        logger.debug(f'dropEvent: {self.drop_url}')
+        self.dropped_urls = a0.mimeData().urls()
+        logger.debug(f'dropEvent: {self.dropped_urls}')
+        self.setText(', '.join([x.toString() for x in self.dropped_urls]))
 
 
 class ProtoframeWindow(QMainWindow):
@@ -50,7 +52,7 @@ class ProtoframeWindow(QMainWindow):
 
         logger.debug('Initializing drop_target_1')
         self.drop_target_1 = DropTargetButton("Drop Target 1", self)
-        self.drop_target_1.setGeometry(20, 20, 100, 100)
+        self.drop_target_1.setGeometry(20, 20, 1000, 100)
         self.drop_target_1.setStyleSheet(
             f'background-color: #dddddd;'
         )
