@@ -4,11 +4,27 @@ import logging
 import argparse
 from typing import List
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent
+from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QMouseEvent, QEnterEvent
 from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton
 
 
 logger = logging.getLogger(__name__)
+
+
+class FFmpegGoButton(QPushButton):
+    def __init__(self, title, parent, ffmpeg_inputs: List):
+        super().__init__(title, parent)
+        self.ffmpeg_inputs = ffmpeg_inputs
+
+    # TODO: Take this enable/disable logic out of this class and handle it elsewhere.
+    def enterEvent(self, event: QEnterEvent) -> None:
+        if self.ffmpeg_inputs:
+            self.setDisabled(False)
+        else:
+            self.setDisabled(True)
+
+    def clicked(self, checked: bool = ...) -> None:
+        pass
 
 
 class DropTargetButton(QPushButton):
@@ -45,16 +61,23 @@ class ProtoframeWindow(QMainWindow):
         logger.debug('Initializing UI')
 
         self.setWindowTitle('Protoframe')
-        self.setGeometry(200, 200, 400, 300)
+        self.setGeometry(200, 200, 600, 300)
         self.setStyleSheet(
             f'background-color: #222222;'
         )
 
         logger.debug('Initializing drop_target_1')
         self.drop_target_1 = DropTargetButton("Drop Target 1", self)
-        self.drop_target_1.setGeometry(20, 20, 1000, 100)
+        self.drop_target_1.setGeometry(20, 20, 560, 100)
         self.drop_target_1.setStyleSheet(
             f'background-color: #dddddd;'
+        )
+
+        logger.debug('Initializing go_button')
+        self.go_button = FFmpegGoButton("Go", self, [])
+        self.go_button.setGeometry(20, 120, 100, 50)
+        self.go_button.setStyleSheet(
+            f'background-color: #ddffdd;'
         )
 
         logger.debug('Showing ProtoframeWindow')
