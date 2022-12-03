@@ -1,80 +1,85 @@
-import os
 import sys
 import logging
 import argparse
-from typing import List
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QMouseEvent, QEnterEvent
-from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton
+from pathlib import Path
+from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QMouseEvent
+from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton, QLabel
 
+from ffmpeg import FFmpeg
 
 logger = logging.getLogger(__name__)
 
 
 class FFmpegGoButton(QPushButton):
-    def __init__(self, title, parent, ffmpeg_inputs: List):
+    # TODO: Add disable logic for when executing ffmpeg won't work
+    def __init__(self, title, parent, ffmpeg_obj: FFmpeg):
         super().__init__(title, parent)
-        self.ffmpeg_inputs = ffmpeg_inputs
+        self.ffmpeg = ffmpeg_obj
 
-    # TODO: Take this enable/disable logic out of this class and handle it elsewhere.
-    def enterEvent(self, event: QEnterEvent) -> None:
-        if self.ffmpeg_inputs:
-            self.setDisabled(False)
-        else:
-            self.setDisabled(True)
-
-    def clicked(self, checked: bool = ...) -> None:
-        pass
+    def mouseReleaseEvent(self, e: QMouseEvent) -> None:
+        self.ffmpeg.output(Path('./output.mp4'))
+        logger.debug('Executing ffmpeg')
+        result = self.ffmpeg.run()
+        logger.debug(result)
 
 
-class DropTargetButton(QPushButton):
-    def __init__(self, title, parent):
+class FFmpegInputDropTarget(QPushButton):
+    def __init__(self, title, parent, ffmpeg_obj: FFmpeg):
         super().__init__(title, parent)
         self.setAcceptDrops(True)
-        self.dropped_urls = List
+        self.ffmpeg = ffmpeg_obj
 
     def dragEnterEvent(self, a0: QDragEnterEvent) -> None:
         has_urls = a0.mimeData().hasUrls()
-        logger.debug(f'dragEnterEvent: hasUrls: {has_urls}')
+        logger.debug(f'dragEnterEvent: {a0.mimeData().text()}')
+        logger.debug(f'dragEnterEvent: hasUrls == {has_urls}')
         if has_urls:
             a0.accept()
         else:
             a0.ignore()
 
     def dropEvent(self, a0: QDropEvent) -> None:
-        self.dropped_urls = a0.mimeData().urls()
-        logger.debug(f'dropEvent: {self.dropped_urls}')
-        self.setText(', '.join([x.toString() for x in self.dropped_urls]))
+        logger.debug(f'dropEvent initiated')
+        for q_url in a0.mimeData().urls():
+            try:
+                str_url = q_url.toLocalFile()
+                logger.debug(f'Adding input url {str_url}')
+                self.setText(str_url)
+                self.ffmpeg.input(Path(str_url))
+            except Exception as e:
+                logger.exception(e)
 
 
 class ProtoframeWindow(QMainWindow):
 
     """The base UI window of Protoframe"""
 
-    def __init__(self):
+    def __init__(self, ffmpeg_obj: FFmpeg):
         super().__init__()
-        self.initUI()
+        self.ffmpeg = ffmpeg_obj
 
-        self.drop_target_1 = None
-
-    def initUI(self):
         logger.debug('Initializing UI')
+        self.drop_target_1 = None
+        self.go_button = None
+        self.progress_label = None
+        self.init_ui()
 
+    def init_ui(self):
         self.setWindowTitle('Protoframe')
-        self.setGeometry(200, 200, 600, 300)
+        self.setGeometry(200, 200, 600, 320)
         self.setStyleSheet(
             f'background-color: #222222;'
         )
 
         logger.debug('Initializing drop_target_1')
-        self.drop_target_1 = DropTargetButton("Drop Target 1", self)
+        self.drop_target_1 = FFmpegInputDropTarget("Drop Target 1", self, self.ffmpeg)
         self.drop_target_1.setGeometry(20, 20, 560, 100)
         self.drop_target_1.setStyleSheet(
             f'background-color: #dddddd;'
         )
 
         logger.debug('Initializing go_button')
-        self.go_button = FFmpegGoButton("Go", self, [])
+        self.go_button = FFmpegGoButton("Go", self, self.ffmpeg)
         self.go_button.setGeometry(20, 120, 100, 50)
         self.go_button.setStyleSheet(
             f'background-color: #ddffdd;'
@@ -118,12 +123,15 @@ def main() -> None:
         # Load config
         # TODO: Parse configurations
 
+        logger.debug('Initializing FFmpeg object')
+        ffmpeg = FFmpeg(Path('ffmpeg.exe'))
+
         # Start app with arguments from command line
         logger.debug(f'Initializing QApplication')
         app = QApplication(sys.argv)
 
         logger.debug(f'Initializing ProtoframeWindow')
-        pfw = ProtoframeWindow()
+        pfw = ProtoframeWindow(ffmpeg)
 
         # Enter main GUI update loop
         logger.info(f'Entering GUI update loop')
