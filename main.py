@@ -1,26 +1,16 @@
 import sys
+import asyncio
 import logging
 import argparse
 from pathlib import Path
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QMouseEvent
-from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton, QLabel
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QDragEnterEvent, QDropEvent
+from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton, QScrollArea, QLabel
+from qasync import QEventLoop, asyncSlot
 
 from ffmpeg import FFmpeg
 
 logger = logging.getLogger(__name__)
-
-
-class FFmpegGoButton(QPushButton):
-    # TODO: Add disable logic for when executing ffmpeg won't work
-    def __init__(self, title, parent, ffmpeg_obj: FFmpeg):
-        super().__init__(title, parent)
-        self.ffmpeg = ffmpeg_obj
-
-    def mouseReleaseEvent(self, e: QMouseEvent) -> None:
-        self.ffmpeg.output(Path('./output.mp4'))
-        logger.debug('Executing ffmpeg')
-        result = self.ffmpeg.run()
-        logger.debug(result)
 
 
 class FFmpegInputDropTarget(QPushButton):
@@ -45,23 +35,23 @@ class FFmpegInputDropTarget(QPushButton):
                 str_url = q_url.toLocalFile()
                 logger.debug(f'Adding input url {str_url}')
                 self.setText(str_url)
-                self.ffmpeg.input(Path(str_url))
+                self.ffmpeg.input(str(Path(str_url)))
             except Exception as e:
                 logger.exception(e)
 
 
 class ProtoframeWindow(QMainWindow):
-
     """The base UI window of Protoframe"""
 
-    def __init__(self, ffmpeg_obj: FFmpeg):
+    def __init__(self, loop: QEventLoop, ffmpeg_obj: FFmpeg):
         super().__init__()
         self.ffmpeg = ffmpeg_obj
 
         logger.debug('Initializing UI')
-        self.drop_target_1 = None
-        self.go_button = None
-        self.progress_label = None
+        self.drop_target_1: FFmpegInputDropTarget | None = None
+        self.go_button: QPushButton | None = None
+        self.progress_label: QLabel | None = None
+        self.progress_area: QScrollArea | None = None
         self.init_ui()
 
     def init_ui(self):
@@ -79,14 +69,56 @@ class ProtoframeWindow(QMainWindow):
         )
 
         logger.debug('Initializing go_button')
-        self.go_button = FFmpegGoButton("Go", self, self.ffmpeg)
+        self.go_button = QPushButton('Go', self)
         self.go_button.setGeometry(20, 120, 100, 50)
         self.go_button.setStyleSheet(
             f'background-color: #ddffdd;'
         )
+        self.go_button.clicked.connect(self.execute_ffmpeg)
+
+        logger.debug('Initializing progress_label')
+        self.progress_label = QLabel('--- Output ---', self)
+        self.progress_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.progress_label.setWordWrap(True)
+
+        self.progress_area = QScrollArea(self)
+        self.progress_area.setGeometry(20, 200, 560, 100)
+        self.progress_area.setWidget(self.progress_label)
+        self.progress_area.setWidgetResizable(True)
+        self.progress_area.setStyleSheet(
+            'color: #111111;' +
+            'background-color: #eeeeee;'
+        )
+        # TODO: definitely put all this progress area stuff into its own class
+        self.progress_area.verticalScrollBar().rangeChanged.connect(self.scroll_to_bottom)
 
         logger.debug('Showing ProtoframeWindow')
         self.show()
+
+    def scroll_to_bottom(self):
+        logger.debug('Scrolling progress_area to bottom')
+        v_scroll_bar = self.progress_area.verticalScrollBar()
+        scroll_to_bottom_value = v_scroll_bar.maximum()
+        v_scroll_bar.setValue(scroll_to_bottom_value)
+
+    @asyncSlot()
+    async def execute_ffmpeg(self) -> None:
+        self.ffmpeg.output(str(Path('./output.mp4')))
+        logger.debug('Executing ffmpeg')
+
+        def add_line_to_progress_label(text: str):
+            logger.debug(f'Adding line to progress_label: {text}')
+            old_text = self.progress_label.text()
+            self.progress_label.setText(old_text + '\n' + text)
+
+        self.ffmpeg.on('start',    lambda p: add_line_to_progress_label(str(p)))
+        self.ffmpeg.on('stderr',   lambda p: add_line_to_progress_label(str(p)))
+        self.ffmpeg.on('progress', lambda p: add_line_to_progress_label(str(p)))
+        self.ffmpeg.on('error',    lambda p: add_line_to_progress_label(str(p)))
+        self.ffmpeg.on('completed',  lambda: add_line_to_progress_label('Completed\n'))
+        self.ffmpeg.on('terminated', lambda: add_line_to_progress_label('Terminated\n'))
+
+        await self.ffmpeg.execute()
 
 
 def main() -> None:
@@ -124,18 +156,22 @@ def main() -> None:
         # TODO: Parse configurations
 
         logger.debug('Initializing FFmpeg object')
-        ffmpeg = FFmpeg(Path('ffmpeg.exe'))
+        ffmpeg = FFmpeg(str(Path('ffmpeg.exe')))
 
         # Start app with arguments from command line
         logger.debug(f'Initializing QApplication')
         app = QApplication(sys.argv)
+        loop = QEventLoop(app)
+        asyncio.set_event_loop(loop)
 
         logger.debug(f'Initializing ProtoframeWindow')
-        pfw = ProtoframeWindow(ffmpeg)
+        pfw = ProtoframeWindow(loop, ffmpeg)
 
         # Enter main GUI update loop
         logger.info(f'Entering GUI update loop')
-        app.exec()
+        pfw.show()
+        with loop:
+            loop.run_forever()
 
     except Exception as e:
         logger.exception(e)
