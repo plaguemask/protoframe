@@ -5,7 +5,7 @@ import argparse
 from pathlib import Path
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent
-from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton, QScrollArea, QTextEdit, QLabel
+from PyQt6.QtWidgets import QApplication, QMainWindow, QGridLayout, QPushButton, QScrollArea, QTextEdit, QWidget, QLabel
 from qasync import QEventLoop, asyncSlot
 
 from ffmpeg import FFmpeg, FFmpegError
@@ -13,11 +13,15 @@ from ffmpeg import FFmpeg, FFmpegError
 logger = logging.getLogger(__name__)
 
 
-class FFmpegInputDropTarget(QPushButton):
+# TODO: consolidate classes?
+
+class FFmpegInputTextEdit(QTextEdit):
     def __init__(self, title, parent, ffmpeg_obj: FFmpeg):
         super().__init__(title, parent)
-        self.setAcceptDrops(True)
         self.ffmpeg = ffmpeg_obj
+
+        self.setAcceptDrops(True)
+        self.textChanged.connect(self.update_ffmpeg_input)
 
     def dragEnterEvent(self, a0: QDragEnterEvent) -> None:
         has_urls = a0.mimeData().hasUrls()
@@ -34,25 +38,41 @@ class FFmpegInputDropTarget(QPushButton):
             try:
                 str_url = q_url.toLocalFile()
                 logger.debug(f'Adding input url {str_url}')
-                self.setText(str_url)
+                self.append(str_url)
                 self.ffmpeg.input(str(Path(str_url)))
             except Exception as e:
                 logger.exception(e)
+
+    def update_ffmpeg_input(self) -> None:
+        logger.debug(f'FFmpegInputTextEdit text changed to: {self.toPlainText()}')
+
+        logger.debug(f'Clearing FFmpeg inputs')
+        self.ffmpeg._input_files = []
+
+        for f in '\n'.split(self.toPlainText()):
+            path_str = str(Path(f))
+            logger.debug(f'Adding FFmpeg input: {path_str}')
+            self.ffmpeg.input(path_str)
 
 
 class FFmpegOutputTextEdit(QTextEdit):
     def __init__(self, parent, ffmpeg_obj: FFmpeg):
         super().__init__(parent)
         self.ffmpeg = ffmpeg_obj
+
+        self.setAcceptDrops(True)
         self.textChanged.connect(self.update_ffmpeg_output)
 
     def update_ffmpeg_output(self) -> None:
         logger.debug(f'FFmpegOutputTextEdit text changed to: {self.toPlainText()}')
 
+        logger.debug(f'Clearing FFmpeg outputs')
         self.ffmpeg._output_files = []
-        path_str = str(Path(self.toPlainText()))
-        logger.debug(f'Setting FFmpeg output to: {path_str}')
-        self.ffmpeg.output(path_str)
+
+        for f in '\n'.split(self.toPlainText()):
+            path_str = str(Path(f))
+            logger.debug(f'Adding FFmpeg output: {path_str}')
+            self.ffmpeg.output(path_str)
 
 
 class FFmpegConsoleDisplay(QScrollArea):
@@ -72,7 +92,7 @@ class FFmpegConsoleDisplay(QScrollArea):
         self.init_ui()
 
     def init_ui(self):
-        self.progress_label = QLabel('--- Output ---', self)
+        self.progress_label = QLabel('--- Console ---', self)
         self.progress_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.progress_label.setWordWrap(True)
 
@@ -101,7 +121,10 @@ class ProtoframeWindow(QMainWindow):
         self.ffmpeg = ffmpeg_obj
 
         logger.debug('Initializing ProtoframeWindow')
-        self.drop_target_1: FFmpegInputDropTarget | None = None
+        self.central_widget: QWidget | None = None
+        self.layout: QGridLayout | None = None
+        self.drop_target_1: FFmpegInputTextEdit | None = None
+        self.args_text_edit: QTextEdit | None = None
         self.output_text_edit: FFmpegOutputTextEdit | None = None
         self.go_button: QPushButton | None = None
         self.stop_button: QPushButton | None = None
@@ -112,47 +135,69 @@ class ProtoframeWindow(QMainWindow):
         self.setWindowTitle('Protoframe')
         self.setGeometry(200, 200, 600, 400)
         self.setStyleSheet(
+            'color: #ffffff;' +
             f'background-color: #222222;'
         )
 
-        logger.debug('Initializing drop_target_1')
-        self.drop_target_1 = FFmpegInputDropTarget("Drop Target 1", self, self.ffmpeg)
-        self.drop_target_1.setGeometry(20, 20, 560, 100)
+        self.layout = QGridLayout()
+        self.setLayout(self.layout)
+
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
+        self.central_widget.setLayout(self.layout)
+
+        self.drop_target_1 = FFmpegInputTextEdit(None, self, self.ffmpeg)
         self.drop_target_1.setStyleSheet(
-            f'background-color: #dddddd;'
+            'color: #000000;' +
+            'background-color: #dddddd;'
         )
 
-        # TODO: Arguments?
-
-        logger.debug('Initializing go_button')
-        self.go_button = QPushButton('Go', self)
-        self.go_button.setGeometry(20, 120, 100, 50)
-        self.go_button.setStyleSheet(
-            f'background-color: #ddffdd;'
-        )
-        self.go_button.clicked.connect(self.execute_ffmpeg)
-
-        logger.debug('Initializing stop_button')
-        self.stop_button = QPushButton('Terminate', self)
-        self.stop_button.setGeometry(120, 120, 100, 50)
-        self.stop_button.setStyleSheet(
-            f'background-color: #ffdddd;'
-        )
-        self.stop_button.clicked.connect(self.terminate_ffmpeg)
-
-        self.console_display = FFmpegConsoleDisplay(self, self.ffmpeg)
-        self.console_display.setGeometry(20, 200, 560, 100)
-        self.console_display.setStyleSheet(
-            'color: #eeeeee;' +
-            'background-color: #111111;'
+        self.args_text_edit = QTextEdit(self)
+        self.args_text_edit.setStyleSheet(
+            'color: #000000;' +
+            'background-color: #dddddd;'
         )
 
         self.output_text_edit = FFmpegOutputTextEdit(self, self.ffmpeg)
-        self.output_text_edit.setGeometry(20, 320, 200, 40)
         self.output_text_edit.setStyleSheet(
-            'color: #111111;' +
-            'background-color: #eeeeee;'
+            'color: #000000;' +
+            'background-color: #dddddd;'
         )
+
+        self.go_button = QPushButton('Go', self)
+        self.go_button.clicked.connect(self.execute_ffmpeg)
+        self.go_button.setStyleSheet(
+            'color: #000000;' +
+            'background-color: #ddffdd;'
+        )
+
+        self.stop_button = QPushButton('Terminate', self)
+        self.stop_button.clicked.connect(self.terminate_ffmpeg)
+        self.stop_button.setStyleSheet(
+            'color: #000000;' +
+            'background-color: #ffdddd;'
+        )
+
+        self.console_display = FFmpegConsoleDisplay(self, self.ffmpeg)
+        self.console_display.setStyleSheet(
+            'color: #ffffff;' +
+            'background-color: #111111;'
+        )
+
+        self.layout.addWidget(QLabel('Input(s):'), 0, 0)
+        self.layout.addWidget(self.drop_target_1, 1, 0)
+        self.layout.addWidget(QLabel('Arguments:'), 2, 0)
+        self.layout.addWidget(self.args_text_edit, 3, 0)
+        self.layout.addWidget(QLabel('Output(s):'), 4, 0)
+        self.layout.addWidget(self.output_text_edit, 5, 0)
+
+        spacer = QWidget()
+        spacer.setMinimumWidth(50)
+        self.layout.addWidget(spacer, 0, 1)
+
+        self.layout.addWidget(self.go_button, 1, 2)
+        self.layout.addWidget(self.stop_button, 3, 2)
+        self.layout.addWidget(self.console_display, 5, 2)
 
         logger.debug('Showing ProtoframeWindow')
         self.show()
@@ -221,13 +266,10 @@ def main() -> None:
         logger.info(f'Entering GUI update loop')
         pfw.show()
         with loop:
-            loop.run_forever()
+            sys.exit(loop.run_forever())
 
     except Exception as e:
         logger.exception(e)
-
-    logger.info(f'Exiting Protoframe')
-    sys.exit()
 
 
 if __name__ == '__main__':
