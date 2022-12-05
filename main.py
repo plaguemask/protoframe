@@ -104,6 +104,7 @@ class ProtoframeWindow(QMainWindow):
         self.drop_target_1: FFmpegInputDropTarget | None = None
         self.output_text_edit: FFmpegOutputTextEdit | None = None
         self.go_button: QPushButton | None = None
+        self.stop_button: QPushButton | None = None
         self.console_display: FFmpegConsoleDisplay | None = None
         self.init_ui()
 
@@ -131,10 +132,13 @@ class ProtoframeWindow(QMainWindow):
         )
         self.go_button.clicked.connect(self.execute_ffmpeg)
 
-        logger.debug('Initializing progress_label')
-        self.progress_label = QLabel('--- Output ---', self)
-        self.progress_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        self.progress_label.setWordWrap(True)
+        logger.debug('Initializing stop_button')
+        self.stop_button = QPushButton('Terminate', self)
+        self.stop_button.setGeometry(120, 120, 100, 50)
+        self.stop_button.setStyleSheet(
+            f'background-color: #ffdddd;'
+        )
+        self.stop_button.clicked.connect(self.terminate_ffmpeg)
 
         self.console_display = FFmpegConsoleDisplay(self, self.ffmpeg)
         self.console_display.setGeometry(20, 200, 560, 100)
@@ -157,6 +161,14 @@ class ProtoframeWindow(QMainWindow):
     async def execute_ffmpeg(self) -> None:
         logger.debug('Executing ffmpeg')
         await self.ffmpeg.execute()
+
+    def terminate_ffmpeg(self) -> None:
+        logger.debug('Terminating ffmpeg')
+        try:
+            self.ffmpeg.terminate()
+        except FFmpegError as e:
+            logger.exception(e)
+            self.console_display.add_line('There is nothing to terminate.')
 
 
 def main() -> None:
