@@ -5,10 +5,10 @@ import argparse
 from pathlib import Path
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent
-from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton, QScrollArea, QLabel
+from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton, QScrollArea, QTextEdit, QLabel
 from qasync import QEventLoop, asyncSlot
 
-from ffmpeg import FFmpeg
+from ffmpeg import FFmpeg, FFmpegError
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,59 @@ class FFmpegInputDropTarget(QPushButton):
                 logger.exception(e)
 
 
+class FFmpegOutputTextEdit(QTextEdit):
+    def __init__(self, parent, ffmpeg_obj: FFmpeg):
+        super().__init__(parent)
+        self.ffmpeg = ffmpeg_obj
+        self.textChanged.connect(self.update_ffmpeg_output)
+
+    def update_ffmpeg_output(self) -> None:
+        logger.debug(f'FFmpegOutputTextEdit text changed to: {self.toPlainText()}')
+
+        self.ffmpeg._output_files = []
+        path_str = str(Path(self.toPlainText()))
+        logger.debug(f'Setting FFmpeg output to: {path_str}')
+        self.ffmpeg.output(path_str)
+
+
+class FFmpegConsoleDisplay(QScrollArea):
+    def __init__(self, parent, ffmpeg_obj: FFmpeg):
+        super().__init__(parent)
+        self.ffmpeg = ffmpeg_obj
+
+        self.ffmpeg.on('start',    lambda p: self.add_line(str(p)))
+        self.ffmpeg.on('stderr',   lambda p: self.add_line(str(p)))
+        self.ffmpeg.on('progress', lambda p: self.add_line(str(p)))
+        self.ffmpeg.on('error',    lambda p: self.add_line(str(p)))
+        self.ffmpeg.on('completed',  lambda: self.add_line('Completed\n'))
+        self.ffmpeg.on('terminated', lambda: self.add_line('Terminated\n'))
+
+        logger.debug('Initializing FFmpegConsoleDisplay')
+        self.progress_label: QLabel | None = None
+        self.init_ui()
+
+    def init_ui(self):
+        self.progress_label = QLabel('--- Output ---', self)
+        self.progress_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.progress_label.setWordWrap(True)
+
+        self.setWidget(self.progress_label)
+        self.setWidgetResizable(True)
+
+        self.verticalScrollBar().rangeChanged.connect(self.scroll_to_bottom)
+
+    def add_line(self, text: str):
+        logger.debug(f'Adding line to progress_label: {text}')
+        old_text = self.progress_label.text()
+        self.progress_label.setText(old_text + '\n' + text)
+
+    def scroll_to_bottom(self):
+        logger.debug('Scrolling progress_area to bottom')
+        v_scroll_bar = self.verticalScrollBar()
+        scroll_to_bottom_value = v_scroll_bar.maximum()
+        v_scroll_bar.setValue(scroll_to_bottom_value)
+
+
 class ProtoframeWindow(QMainWindow):
     """The base UI window of Protoframe"""
 
@@ -47,16 +100,16 @@ class ProtoframeWindow(QMainWindow):
         super().__init__()
         self.ffmpeg = ffmpeg_obj
 
-        logger.debug('Initializing UI')
+        logger.debug('Initializing ProtoframeWindow')
         self.drop_target_1: FFmpegInputDropTarget | None = None
+        self.output_text_edit: FFmpegOutputTextEdit | None = None
         self.go_button: QPushButton | None = None
-        self.progress_label: QLabel | None = None
-        self.progress_area: QScrollArea | None = None
+        self.console_display: FFmpegConsoleDisplay | None = None
         self.init_ui()
 
     def init_ui(self):
         self.setWindowTitle('Protoframe')
-        self.setGeometry(200, 200, 600, 320)
+        self.setGeometry(200, 200, 600, 400)
         self.setStyleSheet(
             f'background-color: #222222;'
         )
@@ -67,6 +120,8 @@ class ProtoframeWindow(QMainWindow):
         self.drop_target_1.setStyleSheet(
             f'background-color: #dddddd;'
         )
+
+        # TODO: Arguments?
 
         logger.debug('Initializing go_button')
         self.go_button = QPushButton('Go', self)
@@ -81,43 +136,26 @@ class ProtoframeWindow(QMainWindow):
         self.progress_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.progress_label.setWordWrap(True)
 
-        self.progress_area = QScrollArea(self)
-        self.progress_area.setGeometry(20, 200, 560, 100)
-        self.progress_area.setWidget(self.progress_label)
-        self.progress_area.setWidgetResizable(True)
-        self.progress_area.setStyleSheet(
+        self.console_display = FFmpegConsoleDisplay(self, self.ffmpeg)
+        self.console_display.setGeometry(20, 200, 560, 100)
+        self.console_display.setStyleSheet(
+            'color: #eeeeee;' +
+            'background-color: #111111;'
+        )
+
+        self.output_text_edit = FFmpegOutputTextEdit(self, self.ffmpeg)
+        self.output_text_edit.setGeometry(20, 320, 200, 40)
+        self.output_text_edit.setStyleSheet(
             'color: #111111;' +
             'background-color: #eeeeee;'
         )
-        # TODO: definitely put all this progress area stuff into its own class
-        self.progress_area.verticalScrollBar().rangeChanged.connect(self.scroll_to_bottom)
 
         logger.debug('Showing ProtoframeWindow')
         self.show()
 
-    def scroll_to_bottom(self):
-        logger.debug('Scrolling progress_area to bottom')
-        v_scroll_bar = self.progress_area.verticalScrollBar()
-        scroll_to_bottom_value = v_scroll_bar.maximum()
-        v_scroll_bar.setValue(scroll_to_bottom_value)
-
     @asyncSlot()
     async def execute_ffmpeg(self) -> None:
-        self.ffmpeg.output(str(Path('./output.mp4')))
         logger.debug('Executing ffmpeg')
-
-        def add_line_to_progress_label(text: str):
-            logger.debug(f'Adding line to progress_label: {text}')
-            old_text = self.progress_label.text()
-            self.progress_label.setText(old_text + '\n' + text)
-
-        self.ffmpeg.on('start',    lambda p: add_line_to_progress_label(str(p)))
-        self.ffmpeg.on('stderr',   lambda p: add_line_to_progress_label(str(p)))
-        self.ffmpeg.on('progress', lambda p: add_line_to_progress_label(str(p)))
-        self.ffmpeg.on('error',    lambda p: add_line_to_progress_label(str(p)))
-        self.ffmpeg.on('completed',  lambda: add_line_to_progress_label('Completed\n'))
-        self.ffmpeg.on('terminated', lambda: add_line_to_progress_label('Terminated\n'))
-
         await self.ffmpeg.execute()
 
 
@@ -153,7 +191,7 @@ def main() -> None:
                             level=logging.DEBUG)
 
         # Load config
-        # TODO: Parse configurations
+        # TODO: Parse CLI configurations
 
         logger.debug('Initializing FFmpeg object')
         ffmpeg = FFmpeg(str(Path('ffmpeg.exe')))
