@@ -54,6 +54,57 @@ class FFmpegInputTextEdit(QTextEdit):
             self.ffmpeg.input(path_str)
 
 
+# TODO: Okay, turns out post-input arguments need to be attached to the output, not put as an option.
+#       Fix that.
+class FFmpegArgsEditor(QWidget):
+    def __init__(self, parent, ffmpeg_obj: FFmpeg):
+        super().__init__(parent)
+        self.ffmpeg = ffmpeg_obj
+
+        self.layout: QVBoxLayout | None = None
+        self.arg_list: QWidget | None = None
+        self.arg_list_layout: QVBoxLayout | None = None
+        self.add_arg_button: QPushButton | None = None
+        self.args = []
+        self.init_ui()
+
+    def init_ui(self):
+        self.layout = QVBoxLayout()
+        self.setLayout(self.layout)
+
+        self.arg_list = QWidget()
+        self.arg_list_layout = QVBoxLayout()
+        self.arg_list.setLayout(self.arg_list_layout)
+        self.layout.addWidget(self.arg_list)
+
+        self.add_arg_button = QPushButton('Add option')
+        self.add_arg_button.clicked.connect(self.add_argument)
+        self.layout.addWidget(self.add_arg_button)
+
+    def add_argument(self):
+        temp = QTextEdit()
+        temp.textChanged.connect(self.update_ffmpeg_args)
+        self.arg_list_layout.addWidget(temp)
+
+    def update_ffmpeg_args(self) -> None:
+        logger.debug(f'Clearing FFmpeg options')
+        self.ffmpeg._global_options = {}
+
+        try:
+            for i in range(self.arg_list_layout.count()):
+                option: QTextEdit = self.arg_list_layout.itemAt(i).widget()
+                option_text = option.toPlainText()
+                logger.debug(f'Adding FFmpeg argument: {option_text}')
+                key = option_text.split(' ')[0]
+                if key == option_text:
+                    self.ffmpeg.option(key)
+                else:
+                    value = option_text[len(key)+1:]
+                    self.ffmpeg.option(key, value)
+        except Exception as e:
+            logger.exception(e)
+
+
 class FFmpegOutputTextEdit(QTextEdit):
     def __init__(self, parent, ffmpeg_obj: FFmpeg):
         super().__init__(parent)
@@ -215,7 +266,7 @@ class ProtoframeWindow(QMainWindow):
             'background-color: #dddddd;'
         )
 
-        self.args_text_edit = QTextEdit(self)
+        self.args_text_edit = FFmpegArgsEditor(self, self.ffmpeg)
         self.args_text_edit.setStyleSheet(
             'color: #000000;' +
             'background-color: #dddddd;'
