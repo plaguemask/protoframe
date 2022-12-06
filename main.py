@@ -5,7 +5,7 @@ import argparse
 from pathlib import Path
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent
-from PyQt6.QtWidgets import QApplication, QMainWindow, QGridLayout, QPushButton, QScrollArea, QTextEdit, QWidget, QLabel
+from PyQt6.QtWidgets import *
 from qasync import QEventLoop, asyncSlot
 
 from ffmpeg import FFmpeg, FFmpegError
@@ -39,7 +39,6 @@ class FFmpegInputTextEdit(QTextEdit):
                 str_url = q_url.toLocalFile()
                 logger.debug(f'Adding input url {str_url}')
                 self.append(str_url)
-                self.ffmpeg.input(str(Path(str_url)))
             except Exception as e:
                 logger.exception(e)
 
@@ -49,7 +48,7 @@ class FFmpegInputTextEdit(QTextEdit):
         logger.debug(f'Clearing FFmpeg inputs')
         self.ffmpeg._input_files = []
 
-        for f in '\n'.split(self.toPlainText()):
+        for f in self.toPlainText().split('\n'):
             path_str = str(Path(f))
             logger.debug(f'Adding FFmpeg input: {path_str}')
             self.ffmpeg.input(path_str)
@@ -69,7 +68,7 @@ class FFmpegOutputTextEdit(QTextEdit):
         logger.debug(f'Clearing FFmpeg outputs')
         self.ffmpeg._output_files = []
 
-        for f in '\n'.split(self.toPlainText()):
+        for f in self.toPlainText().split('\n'):
             path_str = str(Path(f))
             logger.debug(f'Adding FFmpeg output: {path_str}')
             self.ffmpeg.output(path_str)
@@ -80,10 +79,10 @@ class FFmpegConsoleDisplay(QScrollArea):
         super().__init__(parent)
         self.ffmpeg = ffmpeg_obj
 
-        self.ffmpeg.on('start',    lambda p: self.add_line(str(p)))
-        self.ffmpeg.on('stderr',   lambda p: self.add_line(str(p)))
-        self.ffmpeg.on('progress', lambda p: self.add_line(str(p)))
-        self.ffmpeg.on('error',    lambda p: self.add_line(str(p)))
+        self.ffmpeg.on('start',    lambda p: self.add_line('Start: ' + str(p)))
+        self.ffmpeg.on('stderr',   lambda p: self.add_line('Stderr: ' + str(p)))
+        self.ffmpeg.on('progress', lambda p: self.add_line('Progress: ' + str(p)))
+        self.ffmpeg.on('error',    lambda p: self.add_line('Error: ' + str(p)))
         self.ffmpeg.on('completed',  lambda: self.add_line('Completed\n'))
         self.ffmpeg.on('terminated', lambda: self.add_line('Terminated\n'))
 
@@ -113,6 +112,71 @@ class FFmpegConsoleDisplay(QScrollArea):
         v_scroll_bar.setValue(scroll_to_bottom_value)
 
 
+class FFmpegExecuteTerminateButton(QPushButton):
+    def __init__(self, parent, ffmpeg_obj: FFmpeg):
+        super().__init__(parent)
+        self.ffmpeg = ffmpeg_obj
+        self.init_ui()
+
+    def init_ui(self):
+        self.ffmpeg.on('error', lambda p: self.reset())
+        self.ffmpeg.on('completed', self.reset)
+        self.ffmpeg.on('terminated', self.reset)
+
+        self.setText('Go')
+        self.clicked.connect(self.go)
+        self.setStyleSheet(
+            'color: #000000;' +
+            'background-color: #ddffdd;'
+        )
+
+    def go(self) -> None:
+        self.execute_ffmpeg()
+        self.switch_to_stop_button()
+
+    def stop(self):
+        self.terminate_ffmpeg()
+        self.switch_to_go_button()
+
+    def reset(self):
+        self.ffmpeg._executed = False
+        self.ffmpeg._terminated = False
+        self.switch_to_go_button()
+
+    def switch_to_stop_button(self):
+        self.setText('Terminate')
+        self.setStyleSheet(
+            'color: #000000;' +
+            'background-color: #ffdddd;'
+        )
+        self.clicked.disconnect(self.go)
+        self.clicked.connect(self.stop)
+
+    def switch_to_go_button(self):
+        self.setText('Go')
+        self.setStyleSheet(
+            'color: #000000;' +
+            'background-color: #ddffdd;'
+        )
+        self.clicked.disconnect(self.stop)
+        self.clicked.connect(self.go)
+
+    @asyncSlot()
+    async def execute_ffmpeg(self) -> None:
+        logger.debug('Executing ffmpeg')
+        try:
+            await self.ffmpeg.execute()
+        except Exception as e:
+            logger.exception(e)
+
+    def terminate_ffmpeg(self) -> None:
+        logger.debug('Terminating ffmpeg')
+        try:
+            self.ffmpeg.terminate()
+        except Exception as e:
+            logger.exception(e)
+
+
 class ProtoframeWindow(QMainWindow):
     """The base UI window of Protoframe"""
 
@@ -126,8 +190,7 @@ class ProtoframeWindow(QMainWindow):
         self.drop_target_1: FFmpegInputTextEdit | None = None
         self.args_text_edit: QTextEdit | None = None
         self.output_text_edit: FFmpegOutputTextEdit | None = None
-        self.go_button: QPushButton | None = None
-        self.stop_button: QPushButton | None = None
+        self.go_stop_button: FFmpegExecuteTerminateButton | None = None
         self.console_display: FFmpegConsoleDisplay | None = None
         self.init_ui()
 
@@ -164,19 +227,7 @@ class ProtoframeWindow(QMainWindow):
             'background-color: #dddddd;'
         )
 
-        self.go_button = QPushButton('Go', self)
-        self.go_button.clicked.connect(self.execute_ffmpeg)
-        self.go_button.setStyleSheet(
-            'color: #000000;' +
-            'background-color: #ddffdd;'
-        )
-
-        self.stop_button = QPushButton('Terminate', self)
-        self.stop_button.clicked.connect(self.terminate_ffmpeg)
-        self.stop_button.setStyleSheet(
-            'color: #000000;' +
-            'background-color: #ffdddd;'
-        )
+        self.go_stop_button = FFmpegExecuteTerminateButton(self, self.ffmpeg)
 
         self.console_display = FFmpegConsoleDisplay(self, self.ffmpeg)
         self.console_display.setStyleSheet(
@@ -195,25 +246,11 @@ class ProtoframeWindow(QMainWindow):
         spacer.setMinimumWidth(50)
         self.layout.addWidget(spacer, 0, 1)
 
-        self.layout.addWidget(self.go_button, 1, 2)
-        self.layout.addWidget(self.stop_button, 3, 2)
+        self.layout.addWidget(self.go_stop_button, 1, 2)
         self.layout.addWidget(self.console_display, 5, 2)
 
         logger.debug('Showing ProtoframeWindow')
         self.show()
-
-    @asyncSlot()
-    async def execute_ffmpeg(self) -> None:
-        logger.debug('Executing ffmpeg')
-        await self.ffmpeg.execute()
-
-    def terminate_ffmpeg(self) -> None:
-        logger.debug('Terminating ffmpeg')
-        try:
-            self.ffmpeg.terminate()
-        except FFmpegError as e:
-            logger.exception(e)
-            self.console_display.add_line('There is nothing to terminate.')
 
 
 def main() -> None:
