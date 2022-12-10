@@ -2,6 +2,7 @@ import sys
 import asyncio
 import logging
 import argparse
+from typing import List, Dict, Tuple, Optional
 from pathlib import Path
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent
@@ -13,12 +14,35 @@ from ffmpeg import FFmpeg, FFmpegError
 logger = logging.getLogger(__name__)
 
 
+class FFmpegConfig:
+    def __init__(self):
+        self.inputs: List[Path] = []
+        self.globals: Dict = {}
+        self.output_options: Dict = {}
+        self.output: Path = Path()
+
+    def give_config_to_ffmpeg(self, ffmpeg_obj: FFmpeg):
+        logger.debug('Clearing FFmpeg object settings')
+        ffmpeg_obj._input_files.clear()
+        ffmpeg_obj._output_files.clear()
+        ffmpeg_obj._global_options.clear()
+
+        for p in self.inputs:
+            logger.debug(f'Adding input {p} to FFmpeg object')
+            ffmpeg_obj.input(str(p))
+        for glop in self.globals:
+            logger.debug(f'Adding global option {glop} to FFmpeg object')
+            ffmpeg_obj.option(glop, self.globals[glop])
+        logger.debug(f'Adding output {self.output} to FFmpeg object')
+        ffmpeg_obj.output(str(self.output), self.output_options)
+
+
 # TODO: consolidate classes?
 
 class FFmpegInputTextEdit(QTextEdit):
-    def __init__(self, title, parent, ffmpeg_obj: FFmpeg):
+    def __init__(self, title, parent, ff_conf: FFmpegConfig):
         super().__init__(title, parent)
-        self.ffmpeg = ffmpeg_obj
+        self.ff_conf = ff_conf
 
         self.setAcceptDrops(True)
         self.textChanged.connect(self.update_ffmpeg_input)
@@ -46,20 +70,21 @@ class FFmpegInputTextEdit(QTextEdit):
         logger.debug(f'FFmpegInputTextEdit text changed to: {self.toPlainText()}')
 
         logger.debug(f'Clearing FFmpeg inputs')
-        self.ffmpeg._input_files = []
+        self.ff_conf.inputs.clear()
 
         for f in self.toPlainText().split('\n'):
-            path_str = str(Path(f))
-            logger.debug(f'Adding FFmpeg input: {path_str}')
-            self.ffmpeg.input(path_str)
+            path = Path(f)
+            logger.debug(f'Adding FFmpeg input: {path}')
+            self.ff_conf.inputs.append(path)
+
 
 
 # TODO: Okay, turns out post-input arguments need to be attached to the output, not put as an option.
 #       Fix that.
 class FFmpegArgsEditor(QWidget):
-    def __init__(self, parent, ffmpeg_obj: FFmpeg):
+    def __init__(self, parent, ff_conf: FFmpegConfig):
         super().__init__(parent)
-        self.ffmpeg = ffmpeg_obj
+        self.ff_conf = ff_conf
 
         self.layout: QVBoxLayout | None = None
         self.arg_list: QWidget | None = None
@@ -87,42 +112,42 @@ class FFmpegArgsEditor(QWidget):
         self.arg_list_layout.addWidget(temp)
 
     def update_ffmpeg_args(self) -> None:
-        logger.debug(f'Clearing FFmpeg options')
-        self.ffmpeg._global_options = {}
+        logger.debug(f'Clearing FFmpeg output options')
+        self.ff_conf.output_options.clear()
 
         try:
             for i in range(self.arg_list_layout.count()):
                 option: QTextEdit = self.arg_list_layout.itemAt(i).widget()
                 option_text = option.toPlainText()
-                logger.debug(f'Adding FFmpeg argument: {option_text}')
-                key = option_text.split(' ')[0]
-                if key == option_text:
-                    self.ffmpeg.option(key)
+                if not option_text:
+                    continue
+
+                split = option_text.split(' ', maxsplit=1)
+                key = split[0]
+                if len(split) > 1 and split[1]:
+                    value = split[1]
                 else:
-                    value = option_text[len(key)+1:]
-                    self.ffmpeg.option(key, value)
+                    value = None
+
+                logger.debug(f'Adding FFmpeg output argument: "{key}", "{value}"')
+                self.ff_conf.output_options[key] = value
         except Exception as e:
             logger.exception(e)
 
 
 class FFmpegOutputTextEdit(QTextEdit):
-    def __init__(self, parent, ffmpeg_obj: FFmpeg):
+    def __init__(self, parent, ff_conf: FFmpegConfig):
         super().__init__(parent)
-        self.ffmpeg = ffmpeg_obj
+        self.ff_conf = ff_conf
 
         self.setAcceptDrops(True)
         self.textChanged.connect(self.update_ffmpeg_output)
 
     def update_ffmpeg_output(self) -> None:
         logger.debug(f'FFmpegOutputTextEdit text changed to: {self.toPlainText()}')
-
-        logger.debug(f'Clearing FFmpeg outputs')
-        self.ffmpeg._output_files = []
-
-        for f in self.toPlainText().split('\n'):
-            path_str = str(Path(f))
-            logger.debug(f'Adding FFmpeg output: {path_str}')
-            self.ffmpeg.output(path_str)
+        path = Path(self.toPlainText())
+        logger.debug(f'Adding FFmpeg output: {path}')
+        self.ff_conf.output = path
 
 
 class FFmpegConsoleDisplay(QScrollArea):
@@ -167,6 +192,7 @@ class FFmpegExecuteTerminateButton(QPushButton):
     def __init__(self, parent, ffmpeg_obj: FFmpeg):
         super().__init__(parent)
         self.ffmpeg = ffmpeg_obj
+        self.ff_conf = ff_conf
         self.init_ui()
 
     def init_ui(self):
@@ -182,11 +208,11 @@ class FFmpegExecuteTerminateButton(QPushButton):
         )
 
     def go(self) -> None:
-        self.execute_ffmpeg()
+        self._execute_ffmpeg()
         self.switch_to_stop_button()
 
     def stop(self):
-        self.terminate_ffmpeg()
+        self._terminate_ffmpeg()
         self.switch_to_go_button()
 
     def reset(self):
@@ -195,7 +221,7 @@ class FFmpegExecuteTerminateButton(QPushButton):
         self.switch_to_go_button()
 
     def switch_to_stop_button(self):
-        self.setText('Terminate')
+        self.setText('Stop')
         self.setStyleSheet(
             'color: #000000;' +
             'background-color: #ffdddd;'
@@ -213,14 +239,15 @@ class FFmpegExecuteTerminateButton(QPushButton):
         self.clicked.connect(self.go)
 
     @asyncSlot()
-    async def execute_ffmpeg(self) -> None:
+    async def _execute_ffmpeg(self) -> None:
         logger.debug('Executing ffmpeg')
+        self.ff_conf.give_config_to_ffmpeg(self.ffmpeg)
         try:
             await self.ffmpeg.execute()
         except Exception as e:
             logger.exception(e)
 
-    def terminate_ffmpeg(self) -> None:
+    def _terminate_ffmpeg(self) -> None:
         logger.debug('Terminating ffmpeg')
         try:
             self.ffmpeg.terminate()
@@ -231,9 +258,10 @@ class FFmpegExecuteTerminateButton(QPushButton):
 class ProtoframeWindow(QMainWindow):
     """The base UI window of Protoframe"""
 
-    def __init__(self, loop: QEventLoop, ffmpeg_obj: FFmpeg):
+    def __init__(self, loop: QEventLoop, ffmpeg_obj: FFmpeg, ff_conf: FFmpegConfig):
         super().__init__()
         self.ffmpeg = ffmpeg_obj
+        self.ff_conf = ff_conf
 
         logger.debug('Initializing ProtoframeWindow')
         self.central_widget: QWidget | None = None
@@ -260,19 +288,19 @@ class ProtoframeWindow(QMainWindow):
         self.setCentralWidget(self.central_widget)
         self.central_widget.setLayout(self.layout)
 
-        self.drop_target_1 = FFmpegInputTextEdit(None, self, self.ffmpeg)
+        self.drop_target_1 = FFmpegInputTextEdit(None, self, self.ff_conf)
         self.drop_target_1.setStyleSheet(
             'color: #000000;' +
             'background-color: #dddddd;'
         )
 
-        self.args_text_edit = FFmpegArgsEditor(self, self.ffmpeg)
+        self.args_text_edit = FFmpegArgsEditor(self, self.ff_conf)
         self.args_text_edit.setStyleSheet(
             'color: #000000;' +
             'background-color: #dddddd;'
         )
 
-        self.output_text_edit = FFmpegOutputTextEdit(self, self.ffmpeg)
+        self.output_text_edit = FFmpegOutputTextEdit(self, self.ff_conf)
         self.output_text_edit.setStyleSheet(
             'color: #000000;' +
             'background-color: #dddddd;'
@@ -339,6 +367,7 @@ def main() -> None:
         # TODO: Parse CLI configurations
 
         logger.debug('Initializing FFmpeg object')
+        ff_conf = FFmpegConfig()
         ffmpeg = FFmpeg(str(Path('ffmpeg.exe')))
 
         # Start app with arguments from command line
@@ -347,8 +376,7 @@ def main() -> None:
         loop = QEventLoop(app)
         asyncio.set_event_loop(loop)
 
-        logger.debug(f'Initializing ProtoframeWindow')
-        pfw = ProtoframeWindow(loop, ffmpeg)
+        pfw = ProtoframeWindow(loop, ffmpeg, ff_conf)
 
         # Enter main GUI update loop
         logger.info(f'Entering GUI update loop')
