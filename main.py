@@ -78,9 +78,44 @@ class FFmpegInputTextEdit(QTextEdit):
             self.ff_conf.inputs.append(path)
 
 
+class FFmpegOptionCheckBox(QCheckBox):
+    def __init__(self, text: str, parent, option: str, ff_conf: FFmpegConfig):
+        super().__init__(text, parent)
 
-# TODO: Okay, turns out post-input arguments need to be attached to the output, not put as an option.
-#       Fix that.
+        self.ff_conf = ff_conf
+        self.option = option
+        self.stateChanged.connect(self.on_changed)
+
+    def on_changed(self):
+        logger.debug(f'State changed for "{self.option}" option to {self.isChecked()}')
+        if self.isChecked():
+            self.ff_conf.globals[self.option] = None
+        else:
+            self.ff_conf.globals.pop(self.option)
+
+
+class FFmpegDualOptionCheckBox(QCheckBox):
+    def __init__(self, text: str, parent, option_unchecked: str, option_checked: str, ff_conf: FFmpegConfig):
+        super().__init__(text, parent)
+
+        self.ff_conf = ff_conf
+        self.op_unchecked = option_unchecked
+        self.op_checked = option_checked
+        self.stateChanged.connect(self.on_changed)
+
+        self.ff_conf.globals[self.op_unchecked] = None
+
+    def on_changed(self):
+        if self.isChecked():
+            logger.debug(f'State changed from "{self.op_unchecked}" option to "{self.op_checked}"')
+            self.ff_conf.globals.pop(self.op_unchecked)
+            self.ff_conf.globals[self.op_checked] = None
+        else:
+            logger.debug(f'State changed from "{self.op_checked}" option to "{self.op_unchecked}"')
+            self.ff_conf.globals.pop(self.op_checked)
+            self.ff_conf.globals[self.op_unchecked] = None
+
+
 class FFmpegArgsEditor(QWidget):
     def __init__(self, parent, ff_conf: FFmpegConfig):
         super().__init__(parent)
@@ -188,8 +223,8 @@ class FFmpegConsoleDisplay(QScrollArea):
         v_scroll_bar.setValue(scroll_to_bottom_value)
 
 
-class FFmpegExecuteTerminateButton(QPushButton):
-    def __init__(self, parent, ffmpeg_obj: FFmpeg):
+class FFmpegGoStopButton(QPushButton):
+    def __init__(self, parent, ff_conf: FFmpegConfig, ffmpeg_obj: FFmpeg):
         super().__init__(parent)
         self.ffmpeg = ffmpeg_obj
         self.ff_conf = ff_conf
@@ -269,7 +304,8 @@ class ProtoframeWindow(QMainWindow):
         self.drop_target_1: FFmpegInputTextEdit | None = None
         self.args_text_edit: QTextEdit | None = None
         self.output_text_edit: FFmpegOutputTextEdit | None = None
-        self.go_stop_button: FFmpegExecuteTerminateButton | None = None
+        self.overwrite_checkbox: FFmpegOptionCheckBox | None = None
+        self.go_stop_button: FFmpegGoStopButton | None = None
         self.console_display: FFmpegConsoleDisplay | None = None
         self.init_ui()
 
@@ -306,7 +342,9 @@ class ProtoframeWindow(QMainWindow):
             'background-color: #dddddd;'
         )
 
-        self.go_stop_button = FFmpegExecuteTerminateButton(self, self.ffmpeg)
+        self.overwrite_checkbox = FFmpegDualOptionCheckBox('Overwrite files?', self, 'n', 'y', self.ff_conf)
+
+        self.go_stop_button = FFmpegGoStopButton(self, self.ff_conf, self.ffmpeg)
 
         self.console_display = FFmpegConsoleDisplay(self, self.ffmpeg)
         self.console_display.setStyleSheet(
@@ -325,7 +363,8 @@ class ProtoframeWindow(QMainWindow):
         spacer.setMinimumWidth(50)
         self.layout.addWidget(spacer, 0, 1)
 
-        self.layout.addWidget(self.go_stop_button, 1, 2)
+        self.layout.addWidget(self.overwrite_checkbox, 1, 2)
+        self.layout.addWidget(self.go_stop_button, 3, 2)
         self.layout.addWidget(self.console_display, 5, 2)
 
         logger.debug('Showing ProtoframeWindow')
