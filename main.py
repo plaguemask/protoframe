@@ -2,10 +2,11 @@ import sys
 import asyncio
 import logging
 import argparse
-from typing import List, Dict, Tuple, Optional
+from enum import Enum
+from typing import List, Dict, Callable
 from pathlib import Path
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent
+from PyQt6.QtCore import *
+from PyQt6.QtGui import *
 from PyQt6.QtWidgets import *
 from qasync import QEventLoop, asyncSlot
 
@@ -37,171 +38,82 @@ class FFmpegConfig:
         ffmpeg_obj.output(str(self.output), self.output_options)
 
 
-# TODO: consolidate classes?
-
-class FFmpegInputTextEdit(QTextEdit):
-    def __init__(self, title, parent, ff_conf: FFmpegConfig):
-        super().__init__(title, parent)
-        self.ff_conf = ff_conf
-
-        self.setAcceptDrops(True)
-        self.textChanged.connect(self.update_ffmpeg_input)
-
-    def dragEnterEvent(self, a0: QDragEnterEvent) -> None:
-        has_urls = a0.mimeData().hasUrls()
-        logger.debug(f'dragEnterEvent: {a0.mimeData().text()}')
-        logger.debug(f'dragEnterEvent: hasUrls == {has_urls}')
-        if has_urls:
-            a0.accept()
-        else:
-            a0.ignore()
-
-    def dropEvent(self, a0: QDropEvent) -> None:
-        logger.debug(f'dropEvent initiated')
-        for q_url in a0.mimeData().urls():
-            try:
-                str_url = q_url.toLocalFile()
-                logger.debug(f'Adding input url {str_url}')
-                self.append(str_url)
-            except Exception as e:
-                logger.exception(e)
-
-    def update_ffmpeg_input(self) -> None:
-        logger.debug(f'FFmpegInputTextEdit text changed to: {self.toPlainText()}')
-
-        logger.debug(f'Clearing FFmpeg inputs')
-        self.ff_conf.inputs.clear()
-
-        for f in self.toPlainText().split('\n'):
-            path = Path(f)
-            logger.debug(f'Adding FFmpeg input: {path}')
-            self.ff_conf.inputs.append(path)
-
-
-class FFmpegOptionCheckBox(QCheckBox):
-    def __init__(self, text: str, parent, option: str, ff_conf: FFmpegConfig):
-        super().__init__(text, parent)
-
-        self.ff_conf = ff_conf
-        self.option = option
-        self.stateChanged.connect(self.on_changed)
-
-    def on_changed(self):
-        logger.debug(f'State changed for "{self.option}" option to {self.isChecked()}')
-        if self.isChecked():
-            self.ff_conf.globals[self.option] = None
-        else:
-            self.ff_conf.globals.pop(self.option)
-
-
-class FFmpegDualOptionCheckBox(QCheckBox):
-    def __init__(self, text: str, parent, option_unchecked: str, option_checked: str, ff_conf: FFmpegConfig):
-        super().__init__(text, parent)
-
-        self.ff_conf = ff_conf
-        self.op_unchecked = option_unchecked
-        self.op_checked = option_checked
-        self.stateChanged.connect(self.on_changed)
-
-        self.ff_conf.globals[self.op_unchecked] = None
-
-    def on_changed(self):
-        if self.isChecked():
-            logger.debug(f'State changed from "{self.op_unchecked}" option to "{self.op_checked}"')
-            self.ff_conf.globals.pop(self.op_unchecked)
-            self.ff_conf.globals[self.op_checked] = None
-        else:
-            logger.debug(f'State changed from "{self.op_checked}" option to "{self.op_unchecked}"')
-            self.ff_conf.globals.pop(self.op_checked)
-            self.ff_conf.globals[self.op_unchecked] = None
-
-
-class FFmpegArgsEditor(QWidget):
-    def __init__(self, parent, ff_conf: FFmpegConfig):
+class DragAndDropFilePicker(QWidget):
+    def __init__(self, parent, existing_files_only: bool = False):
         super().__init__(parent)
-        self.ff_conf = ff_conf
+        self.existing_files_only = existing_files_only
+        self.setAcceptDrops(True)
 
-        self.layout: QVBoxLayout | None = None
-        self.arg_list: QWidget | None = None
-        self.arg_list_layout: QVBoxLayout | None = None
-        self.add_arg_button: QPushButton | None = None
-        self.args = []
-        self.init_ui()
-
-    def init_ui(self):
-        self.layout = QVBoxLayout()
+        self.layout = QStackedLayout()
+        self.layout.setStackingMode(QStackedLayout.StackingMode.StackAll)
         self.setLayout(self.layout)
 
-        self.arg_list = QWidget()
-        self.arg_list_layout = QVBoxLayout()
-        self.arg_list.setLayout(self.arg_list_layout)
-        self.layout.addWidget(self.arg_list)
+        self.setStyleSheet('''
+            background-color: #332244;
+            color: #eef8ff;
+            font-family: Rubik;
+            font-size: 12pt;
+            text-align: center;
+            border-radius: 15px;
+        ''')
 
-        self.add_arg_button = QPushButton('Add option')
-        self.add_arg_button.clicked.connect(self.add_argument)
-        self.layout.addWidget(self.add_arg_button)
+        self.label = QLabel(self)
+        self.label.setText('Select file...')
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.layout.addWidget(self.label)
 
-    def add_argument(self):
-        temp = QTextEdit()
-        temp.textChanged.connect(self.update_ffmpeg_args)
-        self.arg_list_layout.addWidget(temp)
+    def mouseReleaseEvent(self, e: QMouseEvent) -> None:
+        logger.debug(f'mouseReleaseEvent initiated')
+        dlg = QFileDialog()
+        dlg.setFileMode(
+            QFileDialog.FileMode.ExistingFile if self.existing_files_only else QFileDialog.FileMode.AnyFile
+        )
 
-    def update_ffmpeg_args(self) -> None:
-        logger.debug(f'Clearing FFmpeg output options')
-        self.ff_conf.output_options.clear()
+        logger.debug(f'Executing file dialog')
+        if dlg.exec():
+            filename = dlg.selectedFiles()[0]
+            logger.debug(f'File selected: {filename}')
+            self.label.setText(filename)
 
-        try:
-            for i in range(self.arg_list_layout.count()):
-                option: QTextEdit = self.arg_list_layout.itemAt(i).widget()
-                option_text = option.toPlainText()
-                if not option_text:
-                    continue
+    def dragEnterEvent(self, e: QDragEnterEvent) -> None:
+        data = e.mimeData()
+        if data.hasUrls() and data.urls()[0].isLocalFile():
+            e.accept()
+        else:
+            e.ignore()
 
-                split = option_text.split(' ', maxsplit=1)
-                key = split[0]
-                if len(split) > 1 and split[1]:
-                    value = split[1]
-                else:
-                    value = None
-
-                logger.debug(f'Adding FFmpeg output argument: "{key}", "{value}"')
-                self.ff_conf.output_options[key] = value
-        except Exception as e:
-            logger.exception(e)
+    def dropEvent(self, e: QDropEvent) -> None:
+        logger.debug(f'dropEvent initiated')
+        q_url: QUrl = e.mimeData().urls()[0]
+        logger.debug(f'File dropped: {q_url}')
+        self.label.setText(q_url.toString(QUrl.UrlFormattingOption.PreferLocalFile))
 
 
-class FFmpegOutputTextEdit(QTextEdit):
-    def __init__(self, parent, ff_conf: FFmpegConfig):
+class PresetDropdown(QComboBox):
+    def __init__(self, parent):
         super().__init__(parent)
-        self.ff_conf = ff_conf
-
-        self.setAcceptDrops(True)
-        self.textChanged.connect(self.update_ffmpeg_output)
-
-    def update_ffmpeg_output(self) -> None:
-        logger.debug(f'FFmpegOutputTextEdit text changed to: {self.toPlainText()}')
-        path = Path(self.toPlainText())
-        logger.debug(f'Adding FFmpeg output: {path}')
-        self.ff_conf.output = path
+        self.setStyleSheet('''
+            background-color: #111144;
+            color: #eef8ff;
+            font-family: Rubik;
+            font-size: 12pt;
+            text-align: center;
+            border-radius: 15px;
+        ''')
+        self.setPlaceholderText('what do?')
+        self.setMinimumWidth(200)
 
 
 class FFmpegConsoleDisplay(QScrollArea):
-    def __init__(self, parent, ffmpeg_obj: FFmpeg):
+    def __init__(self, parent):
         super().__init__(parent)
-        self.ffmpeg = ffmpeg_obj
-
-        self.ffmpeg.on('start',    lambda p: self.add_line('Start: ' + str(p)))
-        self.ffmpeg.on('stderr',   lambda p: self.add_line('Stderr: ' + str(p)))
-        self.ffmpeg.on('progress', lambda p: self.add_line('Progress: ' + str(p)))
-        self.ffmpeg.on('error',    lambda p: self.add_line('Error: ' + str(p)))
-        self.ffmpeg.on('completed',  lambda: self.add_line('Completed\n'))
-        self.ffmpeg.on('terminated', lambda: self.add_line('Terminated\n'))
+        self.setStyleSheet('''
+            color: #dddddd;
+            background-color: #444444;
+            border-radius: 5px;
+        ''')
 
         logger.debug('Initializing FFmpegConsoleDisplay')
-        self.progress_label: QLabel | None = None
-        self.init_ui()
-
-    def init_ui(self):
         self.progress_label = QLabel('--- Console ---', self)
         self.progress_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.progress_label.setWordWrap(True)
@@ -223,59 +135,158 @@ class FFmpegConsoleDisplay(QScrollArea):
         v_scroll_bar.setValue(scroll_to_bottom_value)
 
 
-class FFmpegGoStopButton(QPushButton):
-    def __init__(self, parent, ff_conf: FFmpegConfig, ffmpeg_obj: FFmpeg):
+class FFmpegGoStopButtonState(Enum):
+    GO = 'GO'
+    STOP = 'STOP'
+
+
+class FFmpegGoStopButton(QWidget):
+    def __init__(self, parent, on_click: Callable):
         super().__init__(parent)
+        self.on_click_func = on_click
+        self.setStyleSheet('''
+            background-color: #114411;
+            color: #eef8ff;
+            font-family: Rubik;
+            font-size: 12pt;
+            text-align: center;
+            border-radius: 15px;
+        ''')
+        self.layout = QStackedLayout()
+        self.layout.setStackingMode(QStackedLayout.StackingMode.StackAll)
+        self.setLayout(self.layout)
+
+        self.label = QLabel(self)
+        self.label.setText(FFmpegGoStopButtonState.GO.value)
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.layout.addWidget(self.label)
+
+    def mouseReleaseEvent(self, e: QMouseEvent) -> None:
+        txt = self.label.text()
+        if txt == FFmpegGoStopButtonState.GO.value:
+            self.switch_to_stop_button()
+        else:
+            self.switch_to_go_button()
+        self.on_click_func(txt)
+
+    def switch_to_stop_button(self):
+        self.label.setText(FFmpegGoStopButtonState.STOP.value)
+        self.setStyleSheet('''
+            background-color: #441111;
+            color: #eef8ff;
+            font-family: Rubik;
+            font-size: 12pt;
+            text-align: center;
+            border-radius: 15px;
+        ''')
+
+    def switch_to_go_button(self):
+        self.label.setText(FFmpegGoStopButtonState.GO.value)
+        self.setStyleSheet('''
+            background-color: #114411;
+            color: #eef8ff;
+            font-family: Rubik;
+            font-size: 12pt;
+            text-align: center;
+            border-radius: 15px;
+        ''')
+
+
+class ProtoframeWindow(QMainWindow):
+    """The base UI window of Protoframe"""
+
+    def __init__(self, loop: QEventLoop, ffmpeg_obj: FFmpeg, ff_conf: FFmpegConfig):
+        super().__init__()
         self.ffmpeg = ffmpeg_obj
         self.ff_conf = ff_conf
+
+        self.presets = {
+            'SUPER COMPRESS': {'-crf': '50'},
+            'reverse': {'-vf': 'reverse', '-af': 'areverse'},
+            'speed up 2x': {'-vf': 'setpts=0.5*PTS'}
+        }
+
+        logger.debug('Initializing ProtoframeWindow')
+        self.central_widget: QWidget | None = None
+        self.layout: QGridLayout | None = None
+        self.input_box: DragAndDropFilePicker | None = None
+        self.preset_dropdown: PresetDropdown | None = None
+        self.output_box: DragAndDropFilePicker | None = None
+        self.go_stop_button: FFmpegGoStopButton | None = None
+        self.console_display: FFmpegConsoleDisplay | None = None
         self.init_ui()
 
     def init_ui(self):
-        self.ffmpeg.on('error', lambda p: self.reset())
-        self.ffmpeg.on('completed', self.reset)
-        self.ffmpeg.on('terminated', self.reset)
-
-        self.setText('Go')
-        self.clicked.connect(self.go)
+        self.setWindowTitle('Protoframe')
+        self.setGeometry(200, 200, 600, 400)
         self.setStyleSheet(
-            'color: #000000;' +
-            'background-color: #ddffdd;'
+            'color: #ffffff;' +
+            f'background-color: #0a0300;'
         )
 
-    def go(self) -> None:
-        self._execute_ffmpeg()
-        self.switch_to_stop_button()
+        self.layout = QGridLayout()
+        self.setLayout(self.layout)
 
-    def stop(self):
-        self._terminate_ffmpeg()
-        self.switch_to_go_button()
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
+        self.central_widget.setLayout(self.layout)
 
-    def reset(self):
+        self.input_box = DragAndDropFilePicker(self, existing_files_only=True)
+        self.output_box = DragAndDropFilePicker(self, existing_files_only=False)
+
+        self.preset_dropdown = PresetDropdown(self)
+        for preset in self.presets:
+            self.preset_dropdown.addItem(preset)
+
+        self.go_stop_button = FFmpegGoStopButton(self, self.on_go_stop_button_click)
+
+        self.console_display = FFmpegConsoleDisplay(self)
+
+        self.layout.addWidget(QLabel('Input:'), 0, 0)
+        self.layout.addWidget(self.input_box, 1, 0)
+        self.layout.addWidget(self.preset_dropdown, 1, 1)
+        self.layout.addWidget(QLabel('Output:'), 0, 2)
+        self.layout.addWidget(self.output_box, 1, 2)
+
+        spacer = QWidget()
+        spacer.setMinimumHeight(50)
+        self.layout.addWidget(spacer, 2, 0)
+
+        self.layout.addWidget(self.go_stop_button, 3, 0, 1, 3)
+        self.layout.addWidget(self.console_display, 4, 0, 1, 3)
+
+        self.ffmpeg.on('error', lambda p: self.reset_ffmpeg())
+        self.ffmpeg.on('completed',       self.reset_ffmpeg)
+        self.ffmpeg.on('terminated',      self.reset_ffmpeg)
+
+        self.ffmpeg.on('start',    lambda p: self.console_display.add_line('Start: ' + str(p)))
+        self.ffmpeg.on('stderr',   lambda p: self.console_display.add_line('Stderr: ' + str(p)))
+        self.ffmpeg.on('progress', lambda p: self.console_display.add_line('Progress: ' + str(p)))
+        self.ffmpeg.on('error',    lambda p: self.console_display.add_line('Error: ' + str(p)))
+        self.ffmpeg.on('completed',  lambda: self.console_display.add_line('Completed\n'))
+        self.ffmpeg.on('terminated', lambda: self.console_display.add_line('Terminated\n'))
+
+        logger.debug('Showing ProtoframeWindow')
+        self.show()
+
+    def reset_ffmpeg(self):
         self.ffmpeg._executed = False
         self.ffmpeg._terminated = False
-        self.switch_to_go_button()
 
-    def switch_to_stop_button(self):
-        self.setText('Stop')
-        self.setStyleSheet(
-            'color: #000000;' +
-            'background-color: #ffdddd;'
-        )
-        self.clicked.disconnect(self.go)
-        self.clicked.connect(self.stop)
-
-    def switch_to_go_button(self):
-        self.setText('Go')
-        self.setStyleSheet(
-            'color: #000000;' +
-            'background-color: #ddffdd;'
-        )
-        self.clicked.disconnect(self.stop)
-        self.clicked.connect(self.go)
+    def on_go_stop_button_click(self, txt: str) -> None:
+        if txt == FFmpegGoStopButtonState.GO.value:
+            self._execute_ffmpeg()
+        else:
+            self._terminate_ffmpeg()
 
     @asyncSlot()
     async def _execute_ffmpeg(self) -> None:
         logger.debug('Executing ffmpeg')
+        self.ff_conf.globals['-y'] = None
+        self.ff_conf.inputs.append(Path(self.input_box.label.text()))
+        if self.preset_dropdown.currentText() != self.preset_dropdown.placeholderText():
+            self.ff_conf.output_options = self.presets[self.preset_dropdown.currentText()]
+        self.ff_conf.output = Path(self.output_box.label.text())
         self.ff_conf.give_config_to_ffmpeg(self.ffmpeg)
         try:
             await self.ffmpeg.execute()
@@ -288,88 +299,6 @@ class FFmpegGoStopButton(QPushButton):
             self.ffmpeg.terminate()
         except Exception as e:
             logger.exception(e)
-
-
-class ProtoframeWindow(QMainWindow):
-    """The base UI window of Protoframe"""
-
-    def __init__(self, loop: QEventLoop, ffmpeg_obj: FFmpeg, ff_conf: FFmpegConfig):
-        super().__init__()
-        self.ffmpeg = ffmpeg_obj
-        self.ff_conf = ff_conf
-
-        logger.debug('Initializing ProtoframeWindow')
-        self.central_widget: QWidget | None = None
-        self.layout: QGridLayout | None = None
-        self.drop_target_1: FFmpegInputTextEdit | None = None
-        self.args_text_edit: QTextEdit | None = None
-        self.output_text_edit: FFmpegOutputTextEdit | None = None
-        self.overwrite_checkbox: FFmpegOptionCheckBox | None = None
-        self.go_stop_button: FFmpegGoStopButton | None = None
-        self.console_display: FFmpegConsoleDisplay | None = None
-        self.init_ui()
-
-    def init_ui(self):
-        self.setWindowTitle('Protoframe')
-        self.setGeometry(200, 200, 600, 400)
-        self.setStyleSheet(
-            'color: #ffffff;' +
-            f'background-color: #222222;'
-        )
-
-        self.layout = QGridLayout()
-        self.setLayout(self.layout)
-
-        self.central_widget = QWidget()
-        self.setCentralWidget(self.central_widget)
-        self.central_widget.setLayout(self.layout)
-
-        self.drop_target_1 = FFmpegInputTextEdit(None, self, self.ff_conf)
-        self.drop_target_1.setStyleSheet(
-            'color: #000000;' +
-            'background-color: #dddddd;'
-        )
-
-        self.args_text_edit = FFmpegArgsEditor(self, self.ff_conf)
-        self.args_text_edit.setStyleSheet(
-            'color: #000000;' +
-            'background-color: #dddddd;'
-        )
-
-        self.output_text_edit = FFmpegOutputTextEdit(self, self.ff_conf)
-        self.output_text_edit.setStyleSheet(
-            'color: #000000;' +
-            'background-color: #dddddd;'
-        )
-
-        self.overwrite_checkbox = FFmpegDualOptionCheckBox('Overwrite files?', self, 'n', 'y', self.ff_conf)
-
-        self.go_stop_button = FFmpegGoStopButton(self, self.ff_conf, self.ffmpeg)
-
-        self.console_display = FFmpegConsoleDisplay(self, self.ffmpeg)
-        self.console_display.setStyleSheet(
-            'color: #ffffff;' +
-            'background-color: #111111;'
-        )
-
-        self.layout.addWidget(QLabel('Input(s):'), 0, 0)
-        self.layout.addWidget(self.drop_target_1, 1, 0)
-        self.layout.addWidget(QLabel('Arguments:'), 2, 0)
-        self.layout.addWidget(self.args_text_edit, 3, 0)
-        self.layout.addWidget(QLabel('Output(s):'), 4, 0)
-        self.layout.addWidget(self.output_text_edit, 5, 0)
-
-        spacer = QWidget()
-        spacer.setMinimumWidth(50)
-        self.layout.addWidget(spacer, 0, 1)
-
-        self.layout.addWidget(self.overwrite_checkbox, 1, 2)
-        self.layout.addWidget(self.go_stop_button, 3, 2)
-        self.layout.addWidget(self.console_display, 5, 2)
-
-        logger.debug('Showing ProtoframeWindow')
-        self.show()
-
 
 def main() -> None:
     try:
