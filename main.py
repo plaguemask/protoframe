@@ -3,7 +3,7 @@ import asyncio
 import logging
 import argparse
 from enum import Enum
-from typing import List, Dict, Callable
+from typing import List, Dict, Callable, Optional
 from pathlib import Path
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
@@ -13,6 +13,8 @@ from qasync import QEventLoop, asyncSlot
 from ffmpeg import FFmpeg, FFmpegError
 
 logger = logging.getLogger(__name__)
+
+QURL_LF = QUrl.UrlFormattingOption.PreferLocalFile
 
 
 class FFmpegConfig:
@@ -39,9 +41,10 @@ class FFmpegConfig:
 
 
 class DragAndDropFilePicker(QWidget):
-    def __init__(self, parent, existing_files_only: bool = False):
+    def __init__(self, parent, existing_files_only: bool = False, on_file_drop: Optional[Callable] = None):
         super().__init__(parent)
         self.existing_files_only = existing_files_only
+        self.on_file_drop = on_file_drop
         self.setAcceptDrops(True)
 
         self.layout = QStackedLayout()
@@ -86,7 +89,13 @@ class DragAndDropFilePicker(QWidget):
         logger.debug(f'dropEvent initiated')
         q_url: QUrl = e.mimeData().urls()[0]
         logger.debug(f'File dropped: {q_url}')
-        self.label.setText(q_url.toString(QUrl.UrlFormattingOption.PreferLocalFile))
+        self.set_file(q_url)
+        if self.on_file_drop:
+            self.on_file_drop(q_url)
+
+    def set_file(self, url: QUrl) -> None:
+        logger.debug(f'Setting label to {url}')
+        self.label.setText(url.toString(QURL_LF))
 
 
 class PresetDropdown(QComboBox):
@@ -231,7 +240,8 @@ class ProtoframeWindow(QMainWindow):
         self.setCentralWidget(self.central_widget)
         self.central_widget.setLayout(self.layout)
 
-        self.input_box = DragAndDropFilePicker(self, existing_files_only=True)
+        self.input_box = DragAndDropFilePicker(self, existing_files_only=True,
+                                               on_file_drop=self.update_output_based_on_new_input)
         self.output_box = DragAndDropFilePicker(self, existing_files_only=False)
 
         self.preset_dropdown = PresetDropdown(self)
@@ -268,6 +278,12 @@ class ProtoframeWindow(QMainWindow):
 
         logger.debug('Showing ProtoframeWindow')
         self.show()
+
+    def update_output_based_on_new_input(self, input_label: QUrl) -> None:
+        in_path = Path(input_label.toString(QURL_LF))
+        out_path = in_path.parent / (in_path.stem + '_edit' + in_path.suffix)
+        out_q_url = QUrl(out_path.as_uri())
+        self.output_box.set_file(out_q_url)
 
     def reset_ffmpeg(self):
         self.ffmpeg._executed = False
