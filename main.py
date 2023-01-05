@@ -14,7 +14,12 @@ from ffmpeg import FFmpeg, FFmpegError
 
 logger = logging.getLogger(__name__)
 
-QURL_LF = QUrl.UrlFormattingOption.PreferLocalFile
+
+def local_file_q_url_to_path(q_url: QUrl) -> Path:
+    return Path(q_url.toString(QUrl.UrlFormattingOption.PreferLocalFile))
+
+
+path = local_file_q_url_to_path
 
 
 class FFmpegConfig:
@@ -87,15 +92,16 @@ class DragAndDropFilePicker(QWidget):
 
     def dropEvent(self, e: QDropEvent) -> None:
         logger.debug(f'dropEvent initiated')
-        q_url: QUrl = e.mimeData().urls()[0]
+        q_url = e.mimeData().urls()[0]
+        filepath = path(q_url)
         logger.debug(f'File dropped: {q_url}')
-        self.set_file(q_url)
+        self.set_label_from_path(filepath)
         if self.on_file_drop:
-            self.on_file_drop(q_url)
+            self.on_file_drop(filepath)
 
-    def set_file(self, url: QUrl) -> None:
-        logger.debug(f'Setting label to {url}')
-        self.label.setText(url.toString(QURL_LF))
+    def set_label_from_path(self, p: Path) -> None:
+        logger.debug(f'Setting label to {p}')
+        self.label.setText(p.name)
 
 
 class PresetDropdown(QComboBox):
@@ -144,11 +150,6 @@ class FFmpegConsoleDisplay(QScrollArea):
         v_scroll_bar.setValue(scroll_to_bottom_value)
 
 
-class FFmpegGoStopButtonState(Enum):
-    GO = 'GO'
-    STOP = 'STOP'
-
-
 class FFmpegGoStopButton(QWidget):
     def __init__(self, parent, on_click: Callable):
         super().__init__(parent)
@@ -161,25 +162,28 @@ class FFmpegGoStopButton(QWidget):
             text-align: center;
             border-radius: 15px;
         ''')
+        self.activated = False
+
         self.layout = QStackedLayout()
         self.layout.setStackingMode(QStackedLayout.StackingMode.StackAll)
         self.setLayout(self.layout)
 
         self.label = QLabel(self)
-        self.label.setText(FFmpegGoStopButtonState.GO.value)
+        self.label.setText("GO")
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.layout.addWidget(self.label)
 
     def mouseReleaseEvent(self, e: QMouseEvent) -> None:
-        txt = self.label.text()
-        if txt == FFmpegGoStopButtonState.GO.value:
+        if self.activated:
+            self.activated = False
             self.switch_to_stop_button()
         else:
+            self.activated = True
             self.switch_to_go_button()
-        self.on_click_func(txt)
+        self.on_click_func(self.activated)
 
     def switch_to_stop_button(self):
-        self.label.setText(FFmpegGoStopButtonState.STOP.value)
+        self.label.setText("STOP")
         self.setStyleSheet('''
             background-color: #441111;
             color: #eef8ff;
@@ -190,7 +194,7 @@ class FFmpegGoStopButton(QWidget):
         ''')
 
     def switch_to_go_button(self):
-        self.label.setText(FFmpegGoStopButtonState.GO.value)
+        self.label.setText("GO")
         self.setStyleSheet('''
             background-color: #114411;
             color: #eef8ff;
@@ -212,7 +216,8 @@ class ProtoframeWindow(QMainWindow):
         self.presets = {
             'SUPER COMPRESS': {'-crf': '50'},
             'reverse': {'-vf': 'reverse', '-af': 'areverse'},
-            'speed up 2x': {'-vf': 'setpts=0.5*PTS'}
+            'speed up 2x': {'-vf': 'setpts=0.5*PTS'},
+            'HQ GIF': {'-vf': 'split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse', 'loop': '0'}
         }
 
         logger.debug('Initializing ProtoframeWindow')
@@ -279,18 +284,16 @@ class ProtoframeWindow(QMainWindow):
         logger.debug('Showing ProtoframeWindow')
         self.show()
 
-    def update_output_based_on_new_input(self, input_label: QUrl) -> None:
-        in_path = Path(input_label.toString(QURL_LF))
-        out_path = in_path.parent / (in_path.stem + '_edit' + in_path.suffix)
-        out_q_url = QUrl(out_path.as_uri())
-        self.output_box.set_file(out_q_url)
+    def update_output_based_on_new_input(self, new_path: Path) -> None:
+        out_path = new_path.parent / (new_path.stem + '_edit' + new_path.suffix)
+        self.output_box.set_label_from_path(out_path)
 
     def reset_ffmpeg(self):
         self.ffmpeg._executed = False
         self.ffmpeg._terminated = False
 
-    def on_go_stop_button_click(self, txt: str) -> None:
-        if txt == FFmpegGoStopButtonState.GO.value:
+    def on_go_stop_button_click(self, activated: bool) -> None:
+        if activated:
             self._execute_ffmpeg()
         else:
             self._terminate_ffmpeg()
@@ -315,6 +318,7 @@ class ProtoframeWindow(QMainWindow):
             self.ffmpeg.terminate()
         except Exception as e:
             logger.exception(e)
+
 
 def main() -> None:
     try:
