@@ -24,10 +24,20 @@ path = local_file_q_url_to_path
 
 class FFmpegConfig:
     def __init__(self):
-        self.inputs: List[Path] = []
+        self.input: Path = Path()
         self.globals: Dict = {}
         self.output_options: Dict = {}
         self.output: Path = Path()
+
+    def is_valid(self) -> bool:
+        logger.debug(f'FFmpegConfig validity check:')
+        logger.debug(f'\tInput:  {self.input}')
+        logger.debug(f'\tOutput: {self.output}')
+        if not self.input.suffix or not self.output.suffix:
+            logger.debug('\t✗ INVALID')
+            return False
+        logger.debug('\t✓ VALID')
+        return True
 
     def give_config_to_ffmpeg(self, ffmpeg_obj: FFmpeg):
         logger.debug('Clearing FFmpeg object settings')
@@ -35,9 +45,8 @@ class FFmpegConfig:
         ffmpeg_obj._output_files.clear()
         ffmpeg_obj._global_options.clear()
 
-        for p in self.inputs:
-            logger.debug(f'Adding input {p} to FFmpeg object')
-            ffmpeg_obj.input(str(p))
+        logger.debug(f'Adding input {self.input} to FFmpeg object')
+        ffmpeg_obj.input(str(self.input))
         for glop in self.globals:
             logger.debug(f'Adding global option {glop} to FFmpeg object')
             ffmpeg_obj.option(glop, self.globals[glop])
@@ -46,10 +55,10 @@ class FFmpegConfig:
 
 
 class DragAndDropFilePicker(QWidget):
-    def __init__(self, parent, existing_files_only: bool = False, on_file_drop: Optional[Callable] = None):
+    def __init__(self, parent, existing_files_only: bool = False, on_edit: Optional[Callable] = None):
         super().__init__(parent)
         self.existing_files_only = existing_files_only
-        self.on_file_drop = on_file_drop
+        self.on_edit = on_edit
         self.setAcceptDrops(True)
 
         self.layout = QStackedLayout()
@@ -79,9 +88,11 @@ class DragAndDropFilePicker(QWidget):
 
         logger.debug(f'Executing file dialog')
         if dlg.exec():
-            filename = dlg.selectedFiles()[0]
-            logger.debug(f'File selected: {filename}')
-            self.label.setText(filename)
+            filepath = Path(dlg.selectedFiles()[0])
+            logger.debug(f'File selected: {filepath}')
+            self.set_label_from_path(filepath)
+            if self.on_edit:
+                self.on_edit(filepath)
 
     def dragEnterEvent(self, e: QDragEnterEvent) -> None:
         data = e.mimeData()
@@ -96,12 +107,71 @@ class DragAndDropFilePicker(QWidget):
         filepath = path(q_url)
         logger.debug(f'File dropped: {q_url}')
         self.set_label_from_path(filepath)
-        if self.on_file_drop:
-            self.on_file_drop(filepath)
+        if self.on_edit:
+            self.on_edit(filepath)
 
     def set_label_from_path(self, p: Path) -> None:
         logger.debug(f'Setting label to {p}')
         self.label.setText(p.name)
+
+
+class SplitFileDisplay(QWidget):
+    def __init__(self, parent, on_edit: Optional[Callable] = None):
+        super().__init__(parent)
+        self.on_edit = on_edit
+        self.setAcceptDrops(True)
+
+        self.layout = QHBoxLayout()
+        self.setLayout(self.layout)
+
+        self.setStyleSheet('''
+            background-color: #332244;
+            color: #eef8ff;
+            font-family: Rubik;
+            font-size: 12pt;
+            text-align: center;
+            border-radius: 15px;
+        ''')
+
+        self.name_layout = QStackedLayout()
+        self.name_layout.setStackingMode(QStackedLayout.StackingMode.StackAll)
+        self.layout.addLayout(self.name_layout)
+
+        self.name_label = QLineEdit(self)
+        self.name_label.setText('Select file...')
+        self.name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.name_layout.addWidget(self.name_label)
+
+        self.ext_layout = QStackedLayout()
+        self.ext_layout.setStackingMode(QStackedLayout.StackingMode.StackAll)
+        self.layout.addLayout(self.ext_layout)
+
+        self.ext_label = QComboBox(self)
+        self.ext_label.setEditable(True)
+        self.ext_label.addItems(('.mp4', '.mp3', '.gif'))
+        self.ext_layout.addWidget(self.ext_label)
+
+        self.name_label.textEdited.connect(self._on_edit)
+        self.ext_label.currentTextChanged.connect(self._on_edit)
+
+    def set_label_from_path(self, p: Path) -> None:
+        logger.debug(f'Setting label to {p}')
+        self.name_label.setText(p.stem)
+        self.ext_label.setCurrentText(p.suffix)
+
+    def get_stem(self) -> str:
+        return self.name_label.text()
+
+    def get_suffix(self) -> str:
+        return self.ext_label.currentText()
+
+    def get_name(self) -> str:
+        return self.get_stem() + self.get_suffix()
+
+    def _on_edit(self, e) -> None:
+        logger.debug(f'User edited output to "{self.get_name()}"')
+        if self.on_edit:
+            self.on_edit(self.get_name())
 
 
 class PresetDropdown(QComboBox):
@@ -115,7 +185,6 @@ class PresetDropdown(QComboBox):
             text-align: center;
             border-radius: 15px;
         ''')
-        self.setPlaceholderText('what do?')
         self.setMinimumWidth(200)
 
 
@@ -150,23 +219,42 @@ class FFmpegConsoleDisplay(QScrollArea):
         v_scroll_bar.setValue(scroll_to_bottom_value)
 
 
+class GoodStyleSheet(Dict):
+    def to_string(self):
+        s = ''
+        for i in self.items():
+            s += f'{i[0]}: {i[1]}; '
+        return s
+
+
 class FFmpegGoStopButton(QWidget):
-    def __init__(self, parent, on_click: Callable):
+    def __init__(self, parent, on_click: Callable) -> None:
         super().__init__(parent)
-        self.on_click_func = on_click
-        self.setStyleSheet('''
-            background-color: #114411;
-            color: #eef8ff;
-            font-family: Rubik;
-            font-size: 12pt;
-            text-align: center;
-            border-radius: 15px;
-        ''')
-        self.activated = False
+        self.on_click = on_click
+        self.gss = GoodStyleSheet({
+            'background-color': '#114411',
+            'color': '#eef8ff',
+            'font-family': 'Rubik',
+            'font-size': '12pt',
+            'text-align': 'center',
+            'border-radius': '15px',
+        })
+        self.setStyleSheet(self.gss.to_string())
+        self.in_progress = False
 
         self.layout = QStackedLayout()
         self.layout.setStackingMode(QStackedLayout.StackingMode.StackAll)
         self.setLayout(self.layout)
+
+        self.available = False
+        self.unavailable_cover = QWidget()
+        self.unavailable_cover_gss = GoodStyleSheet(self.gss.copy())
+        self.unavailable_cover_gss['background-color'] = '#444444'
+        self.opacity_effect = QGraphicsOpacityEffect()
+        self.opacity_effect.setOpacity(0.5)
+        self.unavailable_cover.setGraphicsEffect(self.opacity_effect)
+        self.unavailable_cover.setStyleSheet(self.unavailable_cover_gss.to_string())
+        self.layout.addWidget(self.unavailable_cover)
 
         self.label = QLabel(self)
         self.label.setText("GO")
@@ -174,35 +262,28 @@ class FFmpegGoStopButton(QWidget):
         self.layout.addWidget(self.label)
 
     def mouseReleaseEvent(self, e: QMouseEvent) -> None:
-        if self.activated:
-            self.activated = False
-            self.switch_to_stop_button()
+        if self.available:
+            if self.on_click:
+                self.on_click(self.in_progress)
+            self.set_in_progress_state(not self.in_progress)
+
+    def set_in_progress_state(self, in_progress: bool) -> None:
+        self.in_progress = in_progress
+        logger.debug(f'Setting in-progress state to {in_progress}')
+        if in_progress:
+            self.label.setText("STOP")
+            self.gss['background-color'] = '#441111'
         else:
-            self.activated = True
-            self.switch_to_go_button()
-        self.on_click_func(self.activated)
+            self.label.setText("GO")
+            self.gss['background-color'] = '#114411'
+        self.setStyleSheet(self.gss.to_string())
 
-    def switch_to_stop_button(self):
-        self.label.setText("STOP")
-        self.setStyleSheet('''
-            background-color: #441111;
-            color: #eef8ff;
-            font-family: Rubik;
-            font-size: 12pt;
-            text-align: center;
-            border-radius: 15px;
-        ''')
-
-    def switch_to_go_button(self):
-        self.label.setText("GO")
-        self.setStyleSheet('''
-            background-color: #114411;
-            color: #eef8ff;
-            font-family: Rubik;
-            font-size: 12pt;
-            text-align: center;
-            border-radius: 15px;
-        ''')
+    def set_availability(self, availability: bool) -> None:
+        logger.debug(f'Setting availability to {availability}')
+        self.available = availability
+        self.opacity_effect.setOpacity(
+            0 if availability else 0.5
+        )
 
 
 class ProtoframeWindow(QMainWindow):
@@ -214,6 +295,7 @@ class ProtoframeWindow(QMainWindow):
         self.ff_conf = ff_conf
 
         self.presets = {
+            'do nothing (copy)': {'-c': 'copy'},
             'SUPER COMPRESS': {'-crf': '50'},
             'reverse': {'-vf': 'reverse', '-af': 'areverse'},
             'speed up 2x': {'-vf': 'setpts=0.5*PTS'},
@@ -245,9 +327,8 @@ class ProtoframeWindow(QMainWindow):
         self.setCentralWidget(self.central_widget)
         self.central_widget.setLayout(self.layout)
 
-        self.input_box = DragAndDropFilePicker(self, existing_files_only=True,
-                                               on_file_drop=self.update_output_based_on_new_input)
-        self.output_box = DragAndDropFilePicker(self, existing_files_only=False)
+        self.input_box = DragAndDropFilePicker(self, existing_files_only=True, on_edit=self.on_input_edit)
+        self.output_box = SplitFileDisplay(self, on_edit=self.on_output_edit)
 
         self.preset_dropdown = PresetDropdown(self)
         for preset in self.presets:
@@ -284,16 +365,37 @@ class ProtoframeWindow(QMainWindow):
         logger.debug('Showing ProtoframeWindow')
         self.show()
 
-    def update_output_based_on_new_input(self, new_path: Path) -> None:
+    def on_input_edit(self, new_path: Path) -> None:
+        logger.debug(f'Setting FFConfig input to "{new_path}"')
+        self.ff_conf.input = new_path
+
         out_path = new_path.parent / (new_path.stem + '_edit' + new_path.suffix)
         self.output_box.set_label_from_path(out_path)
+        self.on_output_edit(out_path)
+
+        self.go_stop_button.set_availability(self.ff_conf.is_valid())
+
+    def on_output_edit(self, file_name: str | Path) -> None:
+        out_path = Path()
+        if self.ff_conf.output.is_file():
+            out_path = self.ff_conf.output.parent / file_name
+        else:
+            if self.ff_conf.input.is_file():
+                out_path = self.ff_conf.input.parent / file_name
+            else:
+                out_path /= file_name
+        logger.debug(f'Setting FFConfig output to "{out_path}"')
+        self.ff_conf.output = out_path
+
+        self.go_stop_button.set_availability(self.ff_conf.is_valid())
 
     def reset_ffmpeg(self):
+        self.go_stop_button.set_in_progress_state(False)
         self.ffmpeg._executed = False
         self.ffmpeg._terminated = False
 
-    def on_go_stop_button_click(self, activated: bool) -> None:
-        if activated:
+    def on_go_stop_button_click(self, in_progress: bool) -> None:
+        if not in_progress:
             self._execute_ffmpeg()
         else:
             self._terminate_ffmpeg()
@@ -302,10 +404,8 @@ class ProtoframeWindow(QMainWindow):
     async def _execute_ffmpeg(self) -> None:
         logger.debug('Executing ffmpeg')
         self.ff_conf.globals['-y'] = None
-        self.ff_conf.inputs.append(Path(self.input_box.label.text()))
         if self.preset_dropdown.currentText() != self.preset_dropdown.placeholderText():
             self.ff_conf.output_options = self.presets[self.preset_dropdown.currentText()]
-        self.ff_conf.output = Path(self.output_box.label.text())
         self.ff_conf.give_config_to_ffmpeg(self.ffmpeg)
         try:
             await self.ffmpeg.execute()
