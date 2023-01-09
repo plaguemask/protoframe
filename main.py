@@ -2,7 +2,7 @@ import sys
 import asyncio
 import logging
 import argparse
-from typing import Dict, Callable, Optional, Iterable
+from typing import Dict, Callable, Optional, Tuple
 from pathlib import Path
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
@@ -19,6 +19,14 @@ def local_file_q_url_to_path(q_url: QUrl) -> Path:
 
 
 path = local_file_q_url_to_path
+
+
+class GoodStyleSheet(Dict):
+    def to_string(self):
+        s = ''
+        for i in self.items():
+            s += f'{i[0]}: {i[1]}; '
+        return s
 
 
 class FFmpegConfig:
@@ -108,6 +116,21 @@ class DragAndDropFilePicker(QLabel):
         self.setText(p.name)
 
 
+class LockableComboBox(QComboBox):
+    def __init__(self, parent, locked_style: GoodStyleSheet):
+        super().__init__(parent)
+        self.locked_style: GoodStyleSheet = locked_style
+        self._unlocked_style: str = ''
+
+    def changeEvent(self, e: QEvent) -> None:
+        if e.type() == QEvent.Type.EnabledChange:
+            if not self.isEnabled():
+                self._unlocked_style = self.styleSheet()
+                self.setStyleSheet(self.locked_style.to_string())
+                return
+            self.setStyleSheet(self._unlocked_style)
+
+
 class SplitFileDisplay(QWidget):
     def __init__(self, parent, on_edit: Optional[Callable] = None):
         super().__init__(parent)
@@ -134,7 +157,11 @@ class SplitFileDisplay(QWidget):
         ''')
         self.layout.addWidget(self.name_label)
 
-        self.ext_label = QComboBox(self)
+        self.ext_label = LockableComboBox(self, locked_style=GoodStyleSheet({
+            'background-color': '#ddccee',
+            'color': '#554f5b',
+        }))
+        self.ext_label.setFixedWidth(100)
         self.ext_label.setEditable(True)
         self.ext_label.addItems(('.mp4', '.mp3', '.gif'))
         self.layout.addWidget(self.ext_label)
@@ -145,7 +172,8 @@ class SplitFileDisplay(QWidget):
     def set_label_from_path(self, p: Path) -> None:
         logger.debug(f'Setting label to {p}')
         self.name_label.setText(p.stem)
-        self.ext_label.setCurrentText(p.suffix)
+        if self.ext_label.isEnabled():
+            self.ext_label.setCurrentText(p.suffix)
 
     def get_stem(self) -> str:
         return self.name_label.text()
@@ -160,21 +188,6 @@ class SplitFileDisplay(QWidget):
         logger.debug(f'User edited output to "{self.get_name()}"')
         if self.on_edit:
             self.on_edit(self.get_name())
-
-
-class PresetDropdown(QComboBox):
-    def __init__(self, parent, presets: Iterable):
-        super().__init__(parent)
-        self.setStyleSheet('''
-            background-color: #eeaaff;
-            color: #332244;
-            text-align: center;
-            border-radius: 15px;
-        ''')
-        self.setMinimumWidth(220)
-
-        for p in presets:
-            self.addItem(p)
 
 
 class FFmpegConsoleDisplay(QScrollArea):
@@ -207,14 +220,6 @@ class FFmpegConsoleDisplay(QScrollArea):
         v_scroll_bar = self.verticalScrollBar()
         scroll_to_bottom_value = v_scroll_bar.maximum()
         v_scroll_bar.setValue(scroll_to_bottom_value)
-
-
-class GoodStyleSheet(Dict):
-    def to_string(self):
-        s = ''
-        for i in self.items():
-            s += f'{i[0]}: {i[1]}; '
-        return s
 
 
 class FFmpegGoStopButton(QWidget):
@@ -279,6 +284,32 @@ class FFmpegGoStopButton(QWidget):
         )
 
 
+class Preset:
+    def __init__(self, name: str, args: Dict, locked_output_type: Optional[str] = None):
+        self.name = name
+        self.args = args
+        self.locked_output_type = locked_output_type
+
+
+class PresetDropdown(QComboBox):
+    def __init__(self, parent, presets: Tuple[Preset, ...]):
+        super().__init__(parent)
+        self.setStyleSheet('''
+            background-color: #eeaaff;
+            color: #332244;
+            text-align: center;
+            border-radius: 15px;
+        ''')
+        self.setMinimumWidth(220)
+
+        self.presets = presets
+        for p in presets:
+            self.addItem(p.name)
+
+    def get_current_preset(self) -> Preset:
+        return self.presets[self.currentIndex()]
+
+
 class ProtoframeWindow(QMainWindow):
     """The base UI window of Protoframe"""
 
@@ -294,13 +325,16 @@ class ProtoframeWindow(QMainWindow):
             'font-size': '16pt',
         })
 
-        self.presets = {
-            'do nothing (copy)': {'-c': 'copy'},
-            'SUPER COMPRESS': {'-crf': '50'},
-            'reverse': {'-vf': 'reverse', '-af': 'areverse'},
-            'speed up 2x': {'-vf': 'setpts=0.5*PTS', '-af': 'atempo=2.0'},
-            'HQ GIF': {'-vf': 'split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse', 'loop': '0'}
-        }
+        self.presets = (
+            Preset('Default settings', {}),
+            Preset('Do nothing (copy)', {'-c': 'copy'}),
+            Preset('Remove audio', {'-c': 'copy', '-an': None}),
+            Preset('SUPER COMPRESS', {'-crf': '50', '-b:a': '32k'}),
+            Preset('Reverse', {'-vf': 'reverse', '-af': 'areverse'}),
+            Preset('Speed up 2x', {'-vf': 'setpts=0.5*PTS', '-af': 'atempo=2.0'}),
+            Preset('HQ GIF', {'-vf': 'split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse', 'loop': '0'},
+                   locked_output_type='.gif'),
+        )
 
         logger.debug('Initializing ProtoframeWindow')
         self.central_widget: QWidget | None = None
@@ -317,7 +351,6 @@ class ProtoframeWindow(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle('Protoframe')
-        # self.setGeometry(200, 200, 900, 400)
         self.setStyleSheet(self.gss.to_string())
 
         # Widgets
@@ -327,6 +360,8 @@ class ProtoframeWindow(QMainWindow):
         self.input_box = DragAndDropFilePicker(self, get_directory=self.get_directory, on_edit=self.on_input_edit)
         self.output_box = SplitFileDisplay(self, on_edit=self.on_output_edit)
         self.preset_dropdown = PresetDropdown(self, presets=self.presets)
+        self.preset_dropdown.activated.connect(lambda index: self.on_preset_edit(self.presets[index]))
+
         self.go_stop_button = FFmpegGoStopButton(self, on_click=self.on_go_stop_button_click)
         self.console_display = FFmpegConsoleDisplay(self)
 
@@ -408,6 +443,15 @@ class ProtoframeWindow(QMainWindow):
 
         self.go_stop_button.set_availability(self.ff_conf.is_valid())
 
+    def on_preset_edit(self, selected: Preset) -> None:
+        logger.debug(f'User selected preset "{selected.name}"')
+
+        if selected.locked_output_type:
+            self.output_box.ext_label.setEnabled(False)
+            self.output_box.ext_label.setCurrentText(selected.locked_output_type)
+        else:
+            self.output_box.ext_label.setEnabled(True)
+
     def reset_ffmpeg(self):
         self.go_stop_button.set_in_progress_state(False)
         self.ffmpeg._executed = False
@@ -423,8 +467,7 @@ class ProtoframeWindow(QMainWindow):
     async def _execute_ffmpeg(self) -> None:
         logger.debug('Executing ffmpeg')
         self.ff_conf.globals['-y'] = None
-        if self.preset_dropdown.currentText() != self.preset_dropdown.placeholderText():
-            self.ff_conf.output_options = self.presets[self.preset_dropdown.currentText()]
+        self.ff_conf.output_options = self.preset_dropdown.get_current_preset().args
         self.ff_conf.give_config_to_ffmpeg(self.ffmpeg)
         try:
             await self.ffmpeg.execute()
