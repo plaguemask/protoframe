@@ -2,8 +2,7 @@ import sys
 import asyncio
 import logging
 import argparse
-from enum import Enum
-from typing import List, Dict, Callable, Optional
+from typing import Dict, Callable, Optional, Iterable
 from pathlib import Path
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
@@ -54,30 +53,25 @@ class FFmpegConfig:
         ffmpeg_obj.output(str(self.output), self.output_options)
 
 
-class DragAndDropFilePicker(QWidget):
+class DragAndDropFilePicker(QLabel):
     def __init__(self, parent, existing_files_only: bool = False, on_edit: Optional[Callable] = None):
         super().__init__(parent)
         self.existing_files_only = existing_files_only
         self.on_edit = on_edit
         self.setAcceptDrops(True)
 
-        self.layout = QStackedLayout()
-        self.layout.setStackingMode(QStackedLayout.StackingMode.StackAll)
-        self.setLayout(self.layout)
-
         self.setStyleSheet('''
-            background-color: #332244;
-            color: #eef8ff;
-            font-family: Rubik;
-            font-size: 12pt;
+            background-color: #eeaaff;
+            color: #332244;
             text-align: center;
             border-radius: 15px;
         ''')
 
-        self.label = QLabel(self)
-        self.label.setText('Select file...')
-        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.layout.addWidget(self.label)
+        self.setText('Drop input file here\nor click to browse...')
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setFixedWidth(250)
+        self.setMargin(10)
+        self.setWordWrap(True)
 
     def mouseReleaseEvent(self, e: QMouseEvent) -> None:
         logger.debug(f'mouseReleaseEvent initiated')
@@ -112,7 +106,7 @@ class DragAndDropFilePicker(QWidget):
 
     def set_label_from_path(self, p: Path) -> None:
         logger.debug(f'Setting label to {p}')
-        self.label.setText(p.name)
+        self.setText(p.name)
 
 
 class SplitFileDisplay(QWidget):
@@ -120,36 +114,31 @@ class SplitFileDisplay(QWidget):
         super().__init__(parent)
         self.on_edit = on_edit
         self.setAcceptDrops(True)
-
-        self.layout = QHBoxLayout()
-        self.setLayout(self.layout)
-
         self.setStyleSheet('''
-            background-color: #332244;
-            color: #eef8ff;
-            font-family: Rubik;
-            font-size: 12pt;
+            background-color: #eeaaff;
+            color: #332244;
             text-align: center;
             border-radius: 15px;
         ''')
 
-        self.name_layout = QStackedLayout()
-        self.name_layout.setStackingMode(QStackedLayout.StackingMode.StackAll)
-        self.layout.addLayout(self.name_layout)
+        self.layout = QHBoxLayout()
+        self.setLayout(self.layout)
 
         self.name_label = QLineEdit(self)
-        self.name_label.setText('Select file...')
+        self.name_label.setText('')
+        self.name_label.setFixedWidth(200)
         self.name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.name_layout.addWidget(self.name_label)
-
-        self.ext_layout = QStackedLayout()
-        self.ext_layout.setStackingMode(QStackedLayout.StackingMode.StackAll)
-        self.layout.addLayout(self.ext_layout)
+        self.name_label.setStyleSheet('''
+            background-color: #221133;
+            color: #eeaaff;
+            border: 2px solid #eeaaff;
+        ''')
+        self.layout.addWidget(self.name_label)
 
         self.ext_label = QComboBox(self)
         self.ext_label.setEditable(True)
         self.ext_label.addItems(('.mp4', '.mp3', '.gif'))
-        self.ext_layout.addWidget(self.ext_label)
+        self.layout.addWidget(self.ext_label)
 
         self.name_label.textEdited.connect(self._on_edit)
         self.ext_label.currentTextChanged.connect(self._on_edit)
@@ -175,17 +164,18 @@ class SplitFileDisplay(QWidget):
 
 
 class PresetDropdown(QComboBox):
-    def __init__(self, parent):
+    def __init__(self, parent, presets: Iterable):
         super().__init__(parent)
         self.setStyleSheet('''
-            background-color: #111144;
-            color: #eef8ff;
-            font-family: Rubik;
-            font-size: 12pt;
+            background-color: #eeaaff;
+            color: #332244;
             text-align: center;
             border-radius: 15px;
         ''')
-        self.setMinimumWidth(200)
+        self.setMinimumWidth(220)
+
+        for p in presets:
+            self.addItem(p)
 
 
 class FFmpegConsoleDisplay(QScrollArea):
@@ -195,6 +185,7 @@ class FFmpegConsoleDisplay(QScrollArea):
             color: #dddddd;
             background-color: #444444;
             border-radius: 5px;
+            font-size: 12pt;
         ''')
 
         logger.debug('Initializing FFmpegConsoleDisplay')
@@ -228,14 +219,17 @@ class GoodStyleSheet(Dict):
 
 
 class FFmpegGoStopButton(QWidget):
+    STOP_COLOR = '#dd8888'
+    GO_COLOR = '#aaeeaa'
+
     def __init__(self, parent, on_click: Callable) -> None:
         super().__init__(parent)
         self.on_click = on_click
         self.gss = GoodStyleSheet({
-            'background-color': '#114411',
-            'color': '#eef8ff',
-            'font-family': 'Rubik',
-            'font-size': '12pt',
+            'background-color': self.GO_COLOR,
+            'color': '#000000',
+            'font-size': '32pt',
+            'font-style': 'bold',
             'text-align': 'center',
             'border-radius': '15px',
         })
@@ -249,9 +243,9 @@ class FFmpegGoStopButton(QWidget):
         self.available = False
         self.unavailable_cover = QWidget()
         self.unavailable_cover_gss = GoodStyleSheet(self.gss.copy())
-        self.unavailable_cover_gss['background-color'] = '#444444'
+        self.unavailable_cover_gss['background-color'] = '#666'
         self.opacity_effect = QGraphicsOpacityEffect()
-        self.opacity_effect.setOpacity(0.5)
+        self.opacity_effect.setOpacity(0.8)
         self.unavailable_cover.setGraphicsEffect(self.opacity_effect)
         self.unavailable_cover.setStyleSheet(self.unavailable_cover_gss.to_string())
         self.layout.addWidget(self.unavailable_cover)
@@ -272,17 +266,17 @@ class FFmpegGoStopButton(QWidget):
         logger.debug(f'Setting in-progress state to {in_progress}')
         if in_progress:
             self.label.setText("STOP")
-            self.gss['background-color'] = '#441111'
+            self.gss['background-color'] = self.STOP_COLOR
         else:
             self.label.setText("GO")
-            self.gss['background-color'] = '#114411'
+            self.gss['background-color'] = self.GO_COLOR
         self.setStyleSheet(self.gss.to_string())
 
     def set_availability(self, availability: bool) -> None:
         logger.debug(f'Setting availability to {availability}')
         self.available = availability
         self.opacity_effect.setOpacity(
-            0 if availability else 0.5
+            0 if availability else 0.7
         )
 
 
@@ -294,17 +288,27 @@ class ProtoframeWindow(QMainWindow):
         self.ffmpeg = ffmpeg_obj
         self.ff_conf = ff_conf
 
+        self.gss = GoodStyleSheet({
+            'color': 'white',
+            'background-color': '#0a0300',
+            'font-family': 'Rubik',
+            'font-size': '16pt',
+        })
+
         self.presets = {
             'do nothing (copy)': {'-c': 'copy'},
             'SUPER COMPRESS': {'-crf': '50'},
             'reverse': {'-vf': 'reverse', '-af': 'areverse'},
-            'speed up 2x': {'-vf': 'setpts=0.5*PTS'},
+            'speed up 2x': {'-vf': 'setpts=0.5*PTS', '-af': 'atempo=2.0'},
             'HQ GIF': {'-vf': 'split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse', 'loop': '0'}
         }
 
         logger.debug('Initializing ProtoframeWindow')
         self.central_widget: QWidget | None = None
         self.layout: QGridLayout | None = None
+        self.top_row: QHBoxLayout | None = None
+        self.bottom_row: QHBoxLayout | None = None
+
         self.input_box: DragAndDropFilePicker | None = None
         self.preset_dropdown: PresetDropdown | None = None
         self.output_box: DragAndDropFilePicker | None = None
@@ -314,42 +318,55 @@ class ProtoframeWindow(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle('Protoframe')
-        self.setGeometry(200, 200, 600, 400)
-        self.setStyleSheet(
-            'color: #ffffff;' +
-            f'background-color: #0a0300;'
-        )
+        # self.setGeometry(200, 200, 900, 400)
+        self.setStyleSheet(self.gss.to_string())
 
-        self.layout = QGridLayout()
-        self.setLayout(self.layout)
+        # Widgets
 
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
-        self.central_widget.setLayout(self.layout)
-
         self.input_box = DragAndDropFilePicker(self, existing_files_only=True, on_edit=self.on_input_edit)
         self.output_box = SplitFileDisplay(self, on_edit=self.on_output_edit)
-
-        self.preset_dropdown = PresetDropdown(self)
-        for preset in self.presets:
-            self.preset_dropdown.addItem(preset)
-
-        self.go_stop_button = FFmpegGoStopButton(self, self.on_go_stop_button_click)
-
+        self.preset_dropdown = PresetDropdown(self, presets=self.presets)
+        self.go_stop_button = FFmpegGoStopButton(self, on_click=self.on_go_stop_button_click)
         self.console_display = FFmpegConsoleDisplay(self)
 
-        self.layout.addWidget(QLabel('Input:'), 0, 0)
-        self.layout.addWidget(self.input_box, 1, 0)
-        self.layout.addWidget(self.preset_dropdown, 1, 1)
-        self.layout.addWidget(QLabel('Output:'), 0, 2)
-        self.layout.addWidget(self.output_box, 1, 2)
+        arrow_gss = '''
+            color: white;
+            font-size: 48pt;
+            font-style: bold;
+            text-align: center;
+        '''
+        right_arrow_label = QLabel('🡆')
+        right_arrow_label.setStyleSheet(arrow_gss)
+        right_arrow_label_2 = QLabel('🡆')
+        right_arrow_label_2.setStyleSheet(arrow_gss)
+
+        # Layouts
+
+        self.top_row = QHBoxLayout()
+        self.top_row.addWidget(self.input_box)
+        self.top_row.addWidget(right_arrow_label)
+        self.top_row.addWidget(self.preset_dropdown)
+        self.top_row.addWidget(right_arrow_label_2)
+        self.top_row.addWidget(self.output_box)
 
         spacer = QWidget()
-        spacer.setMinimumHeight(50)
-        self.layout.addWidget(spacer, 2, 0)
+        spacer.setMinimumHeight(20)
 
-        self.layout.addWidget(self.go_stop_button, 3, 0, 1, 3)
-        self.layout.addWidget(self.console_display, 4, 0, 1, 3)
+        self.bottom_row = QHBoxLayout()
+        self.bottom_row.addWidget(self.go_stop_button, stretch=1)
+        self.bottom_row.addWidget(self.console_display, stretch=3)
+
+        self.layout = QVBoxLayout()
+        self.layout.setContentsMargins(20, 20, 20, 20)
+        self.layout.addLayout(self.top_row)
+        self.layout.addWidget(spacer)
+        self.layout.addLayout(self.bottom_row)
+
+        self.central_widget.setLayout(self.layout)
+
+        # Triggers
 
         self.ffmpeg.on('error', lambda p: self.reset_ffmpeg())
         self.ffmpeg.on('completed',       self.reset_ffmpeg)
