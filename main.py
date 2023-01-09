@@ -54,19 +54,17 @@ class FFmpegConfig:
 
 
 class DragAndDropFilePicker(QLabel):
-    def __init__(self, parent, existing_files_only: bool = False, on_edit: Optional[Callable] = None):
+    def __init__(self, parent, get_directory: Callable, on_edit: Optional[Callable] = None):
         super().__init__(parent)
-        self.existing_files_only = existing_files_only
         self.on_edit = on_edit
+        self.get_directory = get_directory
         self.setAcceptDrops(True)
-
         self.setStyleSheet('''
             background-color: #eeaaff;
             color: #332244;
             text-align: center;
             border-radius: 15px;
         ''')
-
         self.setText('Drop input file here\nor click to browse...')
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setFixedWidth(250)
@@ -75,18 +73,19 @@ class DragAndDropFilePicker(QLabel):
 
     def mouseReleaseEvent(self, e: QMouseEvent) -> None:
         logger.debug(f'mouseReleaseEvent initiated')
-        dlg = QFileDialog()
-        dlg.setFileMode(
-            QFileDialog.FileMode.ExistingFile if self.existing_files_only else QFileDialog.FileMode.AnyFile
-        )
-
-        logger.debug(f'Executing file dialog')
-        if dlg.exec():
-            filepath = Path(dlg.selectedFiles()[0])
-            logger.debug(f'File selected: {filepath}')
-            self.set_label_from_path(filepath)
-            if self.on_edit:
-                self.on_edit(filepath)
+        try:
+            directory = str(self.get_directory())
+            dlg = QFileDialog(self, 'Choose input file', directory, '')
+            dlg.setFileMode(QFileDialog.FileMode.ExistingFile)
+            logger.debug(f'Executing file dialog at "{directory}"')
+            if dlg.exec():
+                filepath = Path(dlg.selectedFiles()[0])
+                logger.debug(f'File selected: {filepath}')
+                self.set_label_from_path(filepath)
+                if self.on_edit:
+                    self.on_edit(filepath)
+        except Exception as e:
+            logger.exception(e)
 
     def dragEnterEvent(self, e: QDragEnterEvent) -> None:
         data = e.mimeData()
@@ -325,7 +324,7 @@ class ProtoframeWindow(QMainWindow):
 
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
-        self.input_box = DragAndDropFilePicker(self, existing_files_only=True, on_edit=self.on_input_edit)
+        self.input_box = DragAndDropFilePicker(self, get_directory=self.get_directory, on_edit=self.on_input_edit)
         self.output_box = SplitFileDisplay(self, on_edit=self.on_output_edit)
         self.preset_dropdown = PresetDropdown(self, presets=self.presets)
         self.go_stop_button = FFmpegGoStopButton(self, on_click=self.on_go_stop_button_click)
@@ -381,6 +380,9 @@ class ProtoframeWindow(QMainWindow):
 
         logger.debug('Showing ProtoframeWindow')
         self.show()
+
+    def get_directory(self) -> Path:
+        return self.ff_conf.input.parent
 
     def on_input_edit(self, new_path: Path) -> None:
         logger.debug(f'Setting FFConfig input to "{new_path}"')
