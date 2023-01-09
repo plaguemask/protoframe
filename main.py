@@ -75,7 +75,7 @@ class DragAndDropFilePicker(QLabel):
         ''')
         self.setText('Drop input file here\nor click to browse...')
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setFixedWidth(250)
+        self.setMinimumWidth(250)
         self.setMargin(10)
         self.setWordWrap(True)
 
@@ -148,7 +148,7 @@ class SplitFileDisplay(QWidget):
 
         self.name_label = QLineEdit(self)
         self.name_label.setText('')
-        self.name_label.setFixedWidth(200)
+        self.name_label.setMinimumWidth(200)
         self.name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.name_label.setStyleSheet('''
             background-color: #221133;
@@ -337,16 +337,16 @@ class ProtoframeWindow(QMainWindow):
         )
 
         logger.debug('Initializing ProtoframeWindow')
-        self.central_widget: QWidget | None = None
-        self.layout: QGridLayout | None = None
-        self.top_row: QHBoxLayout | None = None
-        self.bottom_row: QHBoxLayout | None = None
+        self.central_widget: QWidget
+        self.layout: QGridLayout
+        self.top_row: QHBoxLayout
+        self.bottom_row: QHBoxLayout
 
-        self.input_box: DragAndDropFilePicker | None = None
-        self.preset_dropdown: PresetDropdown | None = None
-        self.output_box: DragAndDropFilePicker | None = None
-        self.go_stop_button: FFmpegGoStopButton | None = None
-        self.console_display: FFmpegConsoleDisplay | None = None
+        self.input_box: DragAndDropFilePicker
+        self.preset_dropdown: PresetDropdown
+        self.output_box: DragAndDropFilePicker
+        self.go_stop_button: FFmpegGoStopButton
+        self.console_display: FFmpegConsoleDisplay
         self.init_ui()
 
     def init_ui(self):
@@ -355,10 +355,14 @@ class ProtoframeWindow(QMainWindow):
 
         # Widgets
 
-        self.central_widget = QWidget()
+        self.central_widget = QWidget(self)
         self.setCentralWidget(self.central_widget)
+
         self.input_box = DragAndDropFilePicker(self, get_directory=self.get_directory, on_edit=self.on_input_edit)
+        self.input_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         self.output_box = SplitFileDisplay(self, on_edit=self.on_output_edit)
+
         self.preset_dropdown = PresetDropdown(self, presets=self.presets)
         self.preset_dropdown.activated.connect(lambda index: self.on_preset_edit(self.presets[index]))
 
@@ -373,17 +377,19 @@ class ProtoframeWindow(QMainWindow):
         '''
         right_arrow_label = QLabel('🡆')
         right_arrow_label.setStyleSheet(arrow_gss)
+        right_arrow_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         right_arrow_label_2 = QLabel('🡆')
         right_arrow_label_2.setStyleSheet(arrow_gss)
+        right_arrow_label_2.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Layouts
 
         self.top_row = QHBoxLayout()
-        self.top_row.addWidget(self.input_box)
+        self.top_row.addWidget(self.input_box, stretch=1)
         self.top_row.addWidget(right_arrow_label)
-        self.top_row.addWidget(self.preset_dropdown)
+        self.top_row.addWidget(self.preset_dropdown, stretch=1)
         self.top_row.addWidget(right_arrow_label_2)
-        self.top_row.addWidget(self.output_box)
+        self.top_row.addWidget(self.output_box, stretch=1)
 
         spacer = QWidget()
         spacer.setMinimumHeight(20)
