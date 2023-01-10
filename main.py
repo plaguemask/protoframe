@@ -2,7 +2,7 @@ import sys
 import asyncio
 import logging
 import argparse
-from typing import Dict, Callable, Optional, Tuple
+from typing import Dict, Callable, Optional, Tuple, Type, List
 from pathlib import Path
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
@@ -310,6 +310,41 @@ class PresetDropdown(QComboBox):
         return self.presets[self.currentIndex()]
 
 
+class PresetDropdownListLayout(QWidget):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.layout = QVBoxLayout()
+        self.setLayout(self.layout)
+
+        self.setStyleSheet('''
+            background-color: #eeaaff;
+            color: #332244;
+            text-align: center;
+            border-radius: 15px;
+        ''')
+        self.add_button = QPushButton('+')
+        self.add_button.clicked.connect(self.new_preset_dropdown)
+        self.layout.addWidget(self.add_button)
+
+        self._preset_dropdowns: List[PresetDropdown] = []
+
+    def add_preset_dropdown(self, preset_dropdown: PresetDropdown):
+        self.layout.insertWidget(len(self._preset_dropdowns), preset_dropdown)
+        self._preset_dropdowns.append(preset_dropdown)
+
+    def new_preset_dropdown(self):
+        p = PresetDropdown(self, presets=(
+            Preset('Remove audio', {'-c': 'copy', '-an': None}),
+            Preset('SUPER COMPRESS', {'-crf': '50', '-b:a': '32k'}),
+            Preset('Reverse', {'-vf': 'reverse', '-af': 'areverse'}),
+            Preset('Speed up 2x', {'-vf': 'setpts=0.5*PTS', '-af': 'atempo=2.0'}),
+        ))
+        self.add_preset_dropdown(p)
+
+    def get_preset_dropdowns(self) -> Tuple[PresetDropdown]:
+        return tuple(self._preset_dropdowns)
+
+
 class ProtoframeWindow(QMainWindow):
     """The base UI window of Protoframe"""
 
@@ -344,7 +379,7 @@ class ProtoframeWindow(QMainWindow):
         self.bottom_row: QHBoxLayout
 
         self.input_box: DragAndDropFilePicker
-        self.preset_dropdown: PresetDropdown
+        self.initial_preset_dropdown: PresetDropdown
         self.output_box: DragAndDropFilePicker
         self.go_stop_button: FFmpegGoStopButton
         self.console_display: FFmpegConsoleDisplay
@@ -364,8 +399,11 @@ class ProtoframeWindow(QMainWindow):
 
         self.output_box = SplitFileDisplay(self, on_edit=self.on_output_edit)
 
-        self.preset_dropdown = PresetDropdown(self, presets=self.presets)
-        self.preset_dropdown.activated.connect(lambda index: self.on_preset_edit(self.presets[index]))
+        self.initial_preset_dropdown = PresetDropdown(self, presets=self.presets)
+        self.initial_preset_dropdown.combobox.activated.connect(lambda index: self.on_preset_edit(self.presets[index]))
+
+        self.preset_dropdown_list = PresetDropdownListLayout(self)
+        self.preset_dropdown_list.add_preset_dropdown(self.initial_preset_dropdown)
 
         self.go_stop_button = FFmpegGoStopButton(self, on_click=self.on_go_stop_button_click)
         self.console_display = FFmpegConsoleDisplay(self)
@@ -388,7 +426,7 @@ class ProtoframeWindow(QMainWindow):
         self.top_row = QHBoxLayout()
         self.top_row.addWidget(self.input_box, stretch=1)
         self.top_row.addWidget(right_arrow_label)
-        self.top_row.addWidget(self.preset_dropdown, stretch=1)
+        self.top_row.addWidget(self.preset_dropdown_list, stretch=1)
         self.top_row.addWidget(right_arrow_label_2)
         self.top_row.addWidget(self.output_box, stretch=1)
 
@@ -479,7 +517,12 @@ class ProtoframeWindow(QMainWindow):
     async def _execute_ffmpeg(self) -> None:
         logger.debug('Executing ffmpeg')
         self.ff_conf.globals['-y'] = None
-        self.ff_conf.output_options = self.preset_dropdown.get_current_preset().args
+
+        self.ff_conf.output_options = {}
+        for p in self.preset_dropdown_list.get_preset_dropdowns():
+            self.ff_conf.output_options.update(p.get_current_preset().cli_args)
+        # TODO: USER-EDITABLE ARGUMENTS LIKE SCALE AND SHIZZ!!!!!!!!!!!!!!!!!!!!!!!!!
+
         self.ff_conf.give_config_to_ffmpeg(self.ffmpeg)
         try:
             await self.ffmpeg.execute()
