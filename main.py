@@ -315,6 +315,7 @@ class ProtoframeWindow(QMainWindow):
 
     def __init__(self, loop: QEventLoop, ffmpeg_obj: FFmpeg, ff_conf: FFmpegConfig):
         super().__init__()
+        self.loop = loop
         self.ffmpeg = ffmpeg_obj
         self.ff_conf = ff_conf
 
@@ -421,6 +422,11 @@ class ProtoframeWindow(QMainWindow):
 
         logger.debug('Showing ProtoframeWindow')
         self.show()
+
+    def closeEvent(self, *args, **kwargs):
+        super().closeEvent(*args, **kwargs)
+        logger.debug('Closing GUI event loop')
+        self.loop.close()
 
     def get_directory(self) -> Path:
         return self.ff_conf.input.parent
@@ -535,7 +541,7 @@ def main() -> None:
         pfw = ProtoframeWindow(loop, ffmpeg, ff_conf)
 
         # Enter main GUI update loop
-        logger.info(f'Entering GUI update loop')
+        logger.debug(f'Entering GUI update loop')
         pfw.show()
         with loop:
             sys.exit(loop.run_forever())
