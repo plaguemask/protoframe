@@ -285,13 +285,14 @@ class FFmpegGoStopButton(QWidget):
 
 
 class Preset:
-    def __init__(self, name: str, args: Dict, locked_output_type: Optional[str] = None):
+    def __init__(self, name: str, cli_args: Dict, user_args: Optional[Tuple[Tuple[Type, ...], ...]] = None, locked_output_type: Optional[str] = None):
         self.name = name
-        self.args = args
+        self.cli_args = cli_args
+        self.user_args = user_args
         self.locked_output_type = locked_output_type
 
 
-class PresetDropdown(QComboBox):
+class PresetDropdown(QWidget):
     def __init__(self, parent, presets: Tuple[Preset, ...]):
         super().__init__(parent)
         self.setStyleSheet('''
@@ -302,12 +303,34 @@ class PresetDropdown(QComboBox):
         ''')
         self.setMinimumWidth(220)
 
+        self.layout = QVBoxLayout()
+        self.setLayout(self.layout)
+
+        self.combobox = QComboBox()
+        self.combobox.activated.connect(self.on_activate)
+        self.layout.addWidget(self.combobox)
         self.presets = presets
         for p in presets:
-            self.addItem(p.name)
+            self.combobox.addItem(p.name)
+
+        self.user_input = QLineEdit()
+        self.layout.addWidget(self.user_input)
+        self.user_input.hide()
 
     def get_current_preset(self) -> Preset:
-        return self.presets[self.currentIndex()]
+        return self.presets[self.combobox.currentIndex()]
+
+    def on_activate(self, index):
+        if self.get_current_preset().user_args:
+            self.user_input.show()
+        else:
+            self.user_input.hide()
+
+    def get_user_input(self):
+        if self.user_input.isHidden():
+            return None
+        else:
+            return self.user_input.text()
 
 
 class PresetDropdownListLayout(QWidget):
@@ -334,10 +357,16 @@ class PresetDropdownListLayout(QWidget):
 
     def new_preset_dropdown(self):
         p = PresetDropdown(self, presets=(
+            Preset('Default settings', {}),
+            Preset('Do nothing (copy)', {'-c': 'copy'}),
+            Preset('Crop', {'-vf': 'crop='}, ((int, int, int, int),)),
+            Preset('Resize', {'-vf': 'scale='}, ((int, int),)),
             Preset('Remove audio', {'-c': 'copy', '-an': None}),
             Preset('SUPER COMPRESS', {'-crf': '50', '-b:a': '32k'}),
             Preset('Reverse', {'-vf': 'reverse', '-af': 'areverse'}),
             Preset('Speed up 2x', {'-vf': 'setpts=0.5*PTS', '-af': 'atempo=2.0'}),
+            Preset('HQ GIF', {'-vf': 'split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse', 'loop': '0'},
+                   locked_output_type='.gif'),
         ))
         self.add_preset_dropdown(p)
 
@@ -364,6 +393,8 @@ class ProtoframeWindow(QMainWindow):
         self.presets = (
             Preset('Default settings', {}),
             Preset('Do nothing (copy)', {'-c': 'copy'}),
+            Preset('Crop', {'-vf': 'crop='}, ((int, int, int, int),)),
+            Preset('Resize', {'-vf': 'scale='}, ((int, int),)),
             Preset('Remove audio', {'-c': 'copy', '-an': None}),
             Preset('SUPER COMPRESS', {'-crf': '50', '-b:a': '32k'}),
             Preset('Reverse', {'-vf': 'reverse', '-af': 'areverse'}),
@@ -520,8 +551,12 @@ class ProtoframeWindow(QMainWindow):
 
         self.ff_conf.output_options = {}
         for p in self.preset_dropdown_list.get_preset_dropdowns():
-            self.ff_conf.output_options.update(p.get_current_preset().cli_args)
-        # TODO: USER-EDITABLE ARGUMENTS LIKE SCALE AND SHIZZ!!!!!!!!!!!!!!!!!!!!!!!!!
+            cli_args = p.get_current_preset().cli_args
+            for arg in cli_args:
+                if arg in self.ff_conf.output_options:
+                    self.ff_conf.output_options[arg] += f',{cli_args[arg] + p.get_user_input()}'
+                else:
+                    self.ff_conf.output_options[arg] = cli_args[arg] + p.get_user_input()
 
         self.ff_conf.give_config_to_ffmpeg(self.ffmpeg)
         try:
