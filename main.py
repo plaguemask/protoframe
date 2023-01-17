@@ -2,7 +2,9 @@ import sys
 import asyncio
 import logging
 import argparse
-from typing import Dict, Callable, Optional, Tuple, Type, List
+from abc import ABC, abstractmethod
+from enum import Enum
+from typing import Dict, Callable, Optional, Tuple, Type, List, Any
 from pathlib import Path
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
@@ -285,11 +287,93 @@ class FFmpegGoStopButton(QWidget):
 
 
 class Preset:
-    def __init__(self, name: str, cli_args: Dict, user_args: Optional[Tuple[Tuple[Type, ...], ...]] = None, locked_output_type: Optional[str] = None):
+    def __init__(self, name: str, cli_args: Dict, user_input_widget_type: type = None, locked_output_type: Optional[str] = None):
         self.name = name
         self.cli_args = cli_args
-        self.user_args = user_args
+        self.user_input_widget_type = user_input_widget_type
         self.locked_output_type = locked_output_type
+
+
+class UserInputWidget(QWidget):
+    @classmethod
+    @abstractmethod
+    def get_input_type(cls) -> Tuple[type, ...]:
+        """Get types of user input"""
+    @abstractmethod
+    def get_user_input(self) -> Optional[Tuple[Any, ...]]:
+        """Get current user input state"""
+
+
+class SingleStringInput(UserInputWidget):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.layout = QStackedLayout()
+        self.setLayout(self.layout)
+
+        self.field = QLineEdit()
+        self.layout.addWidget(self.field)
+
+    def get_input_type(self) -> Tuple[type, ...]:
+        return str,
+
+    def get_user_input(self) -> Optional[Tuple[str]]:
+        if self.isHidden():
+            return None
+        return self.field.text(),
+
+
+class TwoStringInput(UserInputWidget):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.layout = QHBoxLayout()
+        self.setLayout(self.layout)
+
+        self.field_1 = QLineEdit()
+        self.layout.addWidget(self.field_1)
+
+        self.field_2 = QLineEdit()
+        self.layout.addWidget(self.field_2)
+
+    def get_input_type(self) -> Tuple[type, ...]:
+        return str, str
+
+    def get_user_input(self) -> Optional[Tuple[str, str]]:
+        if self.isHidden():
+            return None
+        return self.field_1.text(), self.field_2.text()
+
+
+class WHXYInput(UserInputWidget):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.layout = QHBoxLayout()
+        self.setLayout(self.layout)
+        line_edit_ss = '''
+            background-color: #221133;
+            color: #eeaaff;
+            border: 2px solid #eeaaff;
+        '''
+
+        self.field_w = QLineEdit('w')
+        self.layout.addWidget(self.field_w)
+        self.field_w.setStyleSheet(line_edit_ss)
+        self.field_h = QLineEdit('h')
+        self.layout.addWidget(self.field_h)
+        self.field_h.setStyleSheet(line_edit_ss)
+        self.field_x = QLineEdit('x')
+        self.layout.addWidget(self.field_x)
+        self.field_x.setStyleSheet(line_edit_ss)
+        self.field_y = QLineEdit('y')
+        self.layout.addWidget(self.field_y)
+        self.field_y.setStyleSheet(line_edit_ss)
+
+    def get_input_type(self) -> Tuple[type, ...]:
+        return str, str, str, str
+
+    def get_user_input(self) -> Optional[Tuple[str, str, str, str]]:
+        if self.isHidden():
+            return None
+        return self.field_w.text(), self.field_h.text(), self.field_x.text(), self.field_y.text()
 
 
 class PresetDropdown(QWidget):
@@ -303,8 +387,7 @@ class PresetDropdown(QWidget):
         ''')
         self.setMinimumWidth(220)
 
-        self.layout = QVBoxLayout()
-        self.setLayout(self.layout)
+        self.layout = QVBoxLayout(self)
 
         self.combobox = QComboBox()
         self.combobox.activated.connect(self.on_activate)
@@ -313,24 +396,29 @@ class PresetDropdown(QWidget):
         for p in presets:
             self.combobox.addItem(p.name)
 
-        self.user_input = QLineEdit()
-        self.layout.addWidget(self.user_input)
-        self.user_input.hide()
+        self.user_input_container = QWidget(self)
+        self.user_input_container_layout = QStackedLayout(self.user_input_container)
+        self.layout.addWidget(self.user_input_container)
+        self.user_input_container.hide()
 
     def get_current_preset(self) -> Preset:
         return self.presets[self.combobox.currentIndex()]
 
-    def on_activate(self, index):
-        if self.get_current_preset().user_args:
-            self.user_input.show()
+    def on_activate(self, index) -> None:
+        self.reset_user_input_container()
+        if self.get_current_preset().user_input_widget_type:
+            self.user_input_container_layout.addWidget(
+                self.get_current_preset().user_input_widget_type(self)
+            )
+            self.user_input_container.show()
         else:
-            self.user_input.hide()
+            self.user_input_container.hide()
 
-    def get_user_input(self):
-        if self.user_input.isHidden():
-            return None
-        else:
-            return self.user_input.text()
+    def reset_user_input_container(self) -> None:
+        self.layout.removeWidget(self.user_input_container)
+        self.user_input_container = QWidget(self)
+        self.user_input_container_layout = QStackedLayout(self.user_input_container)
+        self.layout.addWidget(self.user_input_container)
 
 
 class PresetDropdownListLayout(QWidget):
@@ -359,8 +447,8 @@ class PresetDropdownListLayout(QWidget):
         p = PresetDropdown(self, presets=(
             Preset('Default settings', {}),
             Preset('Do nothing (copy)', {'-c': 'copy'}),
-            Preset('Crop', {'-vf': 'crop='}, ((int, int, int, int),)),
-            Preset('Resize', {'-vf': 'scale='}, ((int, int),)),
+            Preset('Crop', {'-vf': 'crop='}, WHXYInput),
+            Preset('Resize', {'-vf': 'scale='}, TwoStringInput),
             Preset('Remove audio', {'-c': 'copy', '-an': None}),
             Preset('SUPER COMPRESS', {'-crf': '50', '-b:a': '32k'}),
             Preset('Reverse', {'-vf': 'reverse', '-af': 'areverse'}),
@@ -393,8 +481,8 @@ class ProtoframeWindow(QMainWindow):
         self.presets = (
             Preset('Default settings', {}),
             Preset('Do nothing (copy)', {'-c': 'copy'}),
-            Preset('Crop', {'-vf': 'crop='}, ((int, int, int, int),)),
-            Preset('Resize', {'-vf': 'scale='}, ((int, int),)),
+            Preset('Crop', {'-vf': 'crop='}, WHXYInput),
+            Preset('Resize', {'-vf': 'scale='}, TwoStringInput),
             Preset('Remove audio', {'-c': 'copy', '-an': None}),
             Preset('SUPER COMPRESS', {'-crf': '50', '-b:a': '32k'}),
             Preset('Reverse', {'-vf': 'reverse', '-af': 'areverse'}),
@@ -554,9 +642,9 @@ class ProtoframeWindow(QMainWindow):
             cli_args = p.get_current_preset().cli_args
             for arg in cli_args:
                 if arg in self.ff_conf.output_options:
-                    self.ff_conf.output_options[arg] += f',{cli_args[arg] + p.get_user_input()}'
+                    self.ff_conf.output_options[arg] += f',{cli_args[arg] + p.user_input.get_user_input()}'
                 else:
-                    self.ff_conf.output_options[arg] = cli_args[arg] + p.get_user_input()
+                    self.ff_conf.output_options[arg] = cli_args[arg] + p.user_input.get_user_input()
 
         self.ff_conf.give_config_to_ffmpeg(self.ffmpeg)
         try:
