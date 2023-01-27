@@ -663,8 +663,8 @@ class ProtoframeWindow(QMainWindow):
 def main() -> None:
     try:
         # Defaults for when no command line arguments are given
+        ffmpeg_cmd = 'ffmpeg'
         log_path = 'protoframe.log'
-        config_path = 'config.ini'
 
         # Parse command line arguments
         user_cmd_args = sys.argv[1:]
@@ -673,13 +673,13 @@ def main() -> None:
             parser = argparse.ArgumentParser(
                 description='Protoframe: An FFmpeg GUI that does exactly what you want it to.'
             )
-            parser.add_argument('--configfile', type=str, help='Path to configuration file')
-            parser.add_argument('--logfile', type=str, help='Path to log file')
+            parser.add_argument('--ffmpeg', type=str, help='Path to ffmpeg.exe (default: global system ffmpeg)')
+            parser.add_argument('--logfile', type=str, help='Path to log file (default: ./protoframe.log)')
             args = parser.parse_args()
 
-            if args.configfile:
-                logger.debug(f'Setting config file to "{args.configfile}"')
-                config_path = args.configfile
+            if args.ffmpeg:
+                logger.debug(f'Setting ffmpeg file to "{args.ffmpeg}"')
+                ffmpeg_cmd = args.ffmpeg
             if args.logfile:
                 logger.debug(f'Setting log file to "{args.logfile}"')
                 log_path = args.logfile
@@ -691,12 +691,9 @@ def main() -> None:
                             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
                             level=logging.DEBUG)
 
-        # Load config
-        # TODO: Parse CLI configurations
-
         logger.debug('Initializing FFmpeg object')
         ff_conf = FFmpegConfig()
-        ffmpeg = FFmpeg(str(Path('ffmpeg.exe')))
+        ffmpeg = FFmpeg(ffmpeg_cmd)
 
         # Start app with arguments from command line
         logger.debug(f'Initializing QApplication')
